@@ -43,6 +43,12 @@ public:
     bool isRunning() const noexcept { return running.load(); }
     float getInputPeak() const noexcept { return peakIn.load(); }
 
+    void startSpeakerTest()
+    {
+        testTonePosition.store(0);
+        testToneSamples.store(static_cast<int>(sampleRate.load() * 1.2));
+    }
+
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override
     {
         sampleRate.store(device->getCurrentSampleRate());
@@ -63,9 +69,6 @@ public:
             if (outputs[ch] != nullptr)
                 juce::FloatVectorOperations::clear(outputs[ch], numSamples);
 
-        if (!running.load())
-            return;
-
         const auto sr = sampleRate.load();
         auto pos = writePosition.load();
         float blockIn = 0.0f;
@@ -77,21 +80,33 @@ public:
             float input = 0.0f;
             if (numInputs > 0 && inputs[0] != nullptr)
                 input = inputs[0][i];
-            if (absolute < capture.size())
+            if (running.load() && absolute < capture.size())
                 capture[absolute] = input;
             blockIn = std::max(blockIn, std::abs(input));
 
             float click = 0.0f;
-            for (double clickTime : clickTimes)
+            if (running.load())
             {
-                const auto start = static_cast<long long>(std::llround(clickTime * sr));
-                const auto offset = static_cast<long long>(absolute) - start;
-                const auto length = static_cast<long long>(std::llround(0.008 * sr));
-                if (offset >= 0 && offset < length)
+                for (double clickTime : clickTimes)
                 {
-                    const auto envelope = 1.0 - static_cast<double>(offset) / static_cast<double>(length);
-                    click += static_cast<float>(0.22 * envelope * std::sin(juce::MathConstants<double>::twoPi * 1800.0 * offset / sr));
+                    const auto start = static_cast<long long>(std::llround(clickTime * sr));
+                    const auto offset = static_cast<long long>(absolute) - start;
+                    const auto length = static_cast<long long>(std::llround(0.010 * sr));
+                    if (offset >= 0 && offset < length)
+                    {
+                        const auto envelope = 1.0 - static_cast<double>(offset) / static_cast<double>(length);
+                        click += static_cast<float>(0.48 * envelope * std::sin(juce::MathConstants<double>::twoPi * 1800.0 * offset / sr));
+                    }
                 }
+            }
+
+            auto remaining = testToneSamples.load();
+            if (remaining > 0)
+            {
+                const auto tonePos = testTonePosition.fetch_add(1);
+                const auto fade = std::min(1.0, std::min(tonePos / (0.03 * sr), remaining / (0.03 * sr)));
+                click += static_cast<float>(0.32 * fade * std::sin(juce::MathConstants<double>::twoPi * 660.0 * tonePos / sr));
+                testToneSamples.fetch_sub(1);
             }
             blockOut = std::max(blockOut, std::abs(click));
             for (int ch = 0; ch < numOutputs; ++ch)
@@ -104,12 +119,15 @@ public:
         if (onMeters)
             onMeters(peakIn.load(), peakOut.load());
 
-        pos += static_cast<size_t>(numSamples);
-        writePosition.store(pos);
-        if (pos >= capture.size())
+        if (running.load())
         {
-            running.store(false);
-            triggerAsyncUpdate();
+            pos += static_cast<size_t>(numSamples);
+            writePosition.store(pos);
+            if (pos >= capture.size())
+            {
+                running.store(false);
+                triggerAsyncUpdate();
+            }
         }
     }
 
@@ -194,6 +212,8 @@ private:
     std::atomic<size_t> writePosition { 0 };
     std::atomic<float> peakIn { 0.0f }, peakOut { 0.0f };
     std::atomic<bool> running { false };
+    std::atomic<int> testToneSamples { 0 };
+    std::atomic<long long> testTonePosition { 0 };
 };
 
 class MainComponent final : public juce::Component, private juce::Timer
@@ -216,9 +236,18 @@ public:
         calibrate.onClick = [this] { beginCalibration(); };
         addAndMakeVisible(calibrate);
 
-        addAndMakeVisible(deviceSelector);
-        deviceSelector.setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff242735));
-        deviceSelector.onChange = [this] { selectNamedSetup(); };
+        for (auto* box : { &backendSelector, &inputSelector, &outputSelector })
+        {
+            addAndMakeVisible(*box);
+            box->setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff242735));
+        }
+        backendSelector.onChange = [this] { populateEndpoints(); };
+        inputSelector.onChange = [this] { applyDeviceSetup(); };
+        outputSelector.onChange = [this] { applyDeviceSetup(); };
+
+        testSpeakers.setButtonText("Test speakers");
+        testSpeakers.onClick = [this] { engine.startSpeakerTest(); };
+        addAndMakeVisible(testSpeakers);
 
         engine.onFinished = [this](CalibrationResult r)
         {
@@ -252,7 +281,7 @@ public:
 
         deviceManager.initialise(1, 2, nullptr, true);
         deviceManager.addAudioCallback(&engine);
-        populateDevices();
+        populateBackends();
         startTimerHz(20);
     }
 
@@ -279,74 +308,88 @@ public:
     void resized() override
     {
         title.setBounds(32, 24, getWidth() - 64, 38);
-        deviceSelector.setBounds(32, 80, getWidth() - 64, 36);
-        calibrate.setBounds(32, 320, getWidth() - 64, 52);
-        status.setBounds(40, 400, getWidth() - 80, 130);
+        backendSelector.setBounds(32, 74, 210, 36);
+        inputSelector.setBounds(252, 74, getWidth() - 284, 36);
+        outputSelector.setBounds(32, 122, getWidth() - 250, 36);
+        testSpeakers.setBounds(getWidth() - 208, 122, 176, 36);
+        calibrate.setBounds(32, 332, getWidth() - 64, 52);
+        status.setBounds(40, 410, getWidth() - 80, 125);
     }
 
 private:
-    void populateDevices()
+    void populateBackends()
     {
-        deviceSelector.clear();
+        backendSelector.clear();
         int id = 1;
         for (auto* type : deviceManager.getAvailableDeviceTypes())
         {
             type->scanForDevices();
-            for (const auto& input : type->getDeviceNames(true))
-                for (const auto& output : type->getDeviceNames(false))
-                {
-                    DeviceChoice choice { type->getTypeName(), input, output };
-                    const bool laptopPair = input.containsIgnoreCase("Microphone Array")
-                                         && output.containsIgnoreCase("Speaker");
-                    const bool focusritePair = input.containsIgnoreCase("Focusrite")
-                                            && output.containsIgnoreCase("Focusrite");
-                    const bool focusriteToLaptop = input.containsIgnoreCase("Focusrite")
-                                                && output.containsIgnoreCase("Realtek");
-                    if (laptopPair || focusritePair || focusriteToLaptop)
-                    {
-                        choices.push_back(choice);
-                        deviceSelector.addItem(choice.type + ": " + input + " -> " + output, id++);
-                    }
-                }
+            backendNames.push_back(type->getTypeName());
+            backendSelector.addItem(type->getTypeName(), id++);
         }
-        if (!choices.empty())
-        {
-            auto preferred = 0;
-            auto bestScore = -1;
-            for (int i = 0; i < static_cast<int>(choices.size()); ++i)
-            {
-                const auto& candidate = choices[static_cast<size_t>(i)];
-                int score = 0;
-                if (candidate.input.containsIgnoreCase("Focusrite")) score += 20;
-                if (candidate.output.containsIgnoreCase("Realtek")) score += 10;
-                if (candidate.type.containsIgnoreCase("Windows Audio")) score += 5;
-                if (candidate.type.containsIgnoreCase("DirectSound")) score -= 2;
-                if (score > bestScore) { bestScore = score; preferred = i; }
-            }
-            deviceSelector.setSelectedItemIndex(preferred, juce::sendNotificationSync);
-        }
-        else status.setText("No compatible input/output pair found.", juce::dontSendNotification);
+        auto preferred = 0;
+        for (int i = 0; i < static_cast<int>(backendNames.size()); ++i)
+            if (backendNames[static_cast<size_t>(i)].containsIgnoreCase("Windows Audio")) preferred = i;
+        if (!backendNames.empty())
+            backendSelector.setSelectedItemIndex(preferred, juce::sendNotificationSync);
+        else
+            status.setText("No audio systems found.", juce::dontSendNotification);
     }
 
-    void selectNamedSetup()
+    void populateEndpoints()
     {
-        const auto index = deviceSelector.getSelectedItemIndex();
-        if (!juce::isPositiveAndBelow(index, static_cast<int>(choices.size()))) return;
-        const auto& choice = choices[static_cast<size_t>(index)];
-        deviceManager.setCurrentAudioDeviceType(choice.type, true);
+        const auto backendIndex = backendSelector.getSelectedItemIndex();
+        if (!juce::isPositiveAndBelow(backendIndex, static_cast<int>(backendNames.size()))) return;
+        const auto backend = backendNames[static_cast<size_t>(backendIndex)];
+        deviceManager.setCurrentAudioDeviceType(backend, true);
+        auto* type = deviceManager.getCurrentDeviceTypeObject();
+        if (type == nullptr) return;
+        type->scanForDevices();
+        inputNames = type->getDeviceNames(true);
+        outputNames = type->getDeviceNames(false);
+        inputSelector.clear(juce::dontSendNotification);
+        outputSelector.clear(juce::dontSendNotification);
+        for (int i = 0; i < inputNames.size(); ++i) inputSelector.addItem(inputNames[i], i + 1);
+        for (int i = 0; i < outputNames.size(); ++i) outputSelector.addItem(outputNames[i], i + 1);
+
+        int preferredInput = 0, preferredOutput = 0;
+        for (int i = 0; i < inputNames.size(); ++i)
+            if (inputNames[i].containsIgnoreCase("Focusrite")) preferredInput = i;
+        for (int i = 0; i < outputNames.size(); ++i)
+            if (outputNames[i].containsIgnoreCase("Realtek")) preferredOutput = i;
+        if (!inputNames.isEmpty()) inputSelector.setSelectedItemIndex(preferredInput, juce::dontSendNotification);
+        if (!outputNames.isEmpty()) outputSelector.setSelectedItemIndex(preferredOutput, juce::dontSendNotification);
+        applyDeviceSetup();
+    }
+
+    void applyDeviceSetup()
+    {
+        const auto inputIndex = inputSelector.getSelectedItemIndex();
+        const auto outputIndex = outputSelector.getSelectedItemIndex();
+        if (!juce::isPositiveAndBelow(inputIndex, inputNames.size())
+            || !juce::isPositiveAndBelow(outputIndex, outputNames.size())) return;
         auto setup = deviceManager.getAudioDeviceSetup();
-        setup.inputDeviceName = choice.input;
-        setup.outputDeviceName = choice.output;
+        setup.inputDeviceName = inputNames[inputIndex];
+        setup.outputDeviceName = outputNames[outputIndex];
         setup.sampleRate = 48000.0;
         setup.bufferSize = 256;
         setup.useDefaultInputChannels = false;
         setup.useDefaultOutputChannels = false;
+        setup.inputChannels.clear();
+        setup.outputChannels.clear();
         setup.inputChannels.setBit(0);
         setup.outputChannels.setRange(0, 2, true);
         const auto error = deviceManager.setAudioDeviceSetup(setup, true);
         auto* device = deviceManager.getCurrentAudioDevice();
-        status.setText(error.isNotEmpty() ? error : ("Ready: " + (device ? device->getName() : choice.input)),
+        status.setText(error.isNotEmpty() ? error : ("Ready: " + (device ? device->getName() : setup.inputDeviceName)),
                        juce::dontSendNotification);
+    }
+
+    void selectNamedSetup()
+    {
+        // Retained for source compatibility with older project state; endpoint
+        // selection is now handled independently by applyDeviceSetup().
+        applyDeviceSetup();
     }
 
     void beginCalibration()
@@ -367,13 +410,13 @@ private:
         repaint();
     }
 
-    struct DeviceChoice { juce::String type, input, output; };
     juce::AudioDeviceManager deviceManager;
     CalibrationEngine engine;
     juce::Label title, status;
-    juce::TextButton calibrate;
-    juce::ComboBox deviceSelector;
-    std::vector<DeviceChoice> choices;
+    juce::TextButton calibrate, testSpeakers;
+    juce::ComboBox backendSelector, inputSelector, outputSelector;
+    std::vector<juce::String> backendNames;
+    juce::StringArray inputNames, outputNames;
     CalibrationResult lastResult;
     float inputMeter = 0.0f;
     int attempt = 0;
