@@ -228,6 +228,10 @@ public:
         title.setJustificationType(juce::Justification::centredLeft);
         addAndMakeVisible(title);
 
+        configureCaption(backendCaption, "Audio system");
+        configureCaption(inputCaption, "Input device");
+        configureCaption(outputCaption, "Output device");
+
         status.setText("Opening audio devices…", juce::dontSendNotification);
         status.setJustificationType(juce::Justification::topLeft);
         addAndMakeVisible(status);
@@ -295,28 +299,39 @@ public:
     {
         g.fillAll(juce::Colour(0xff151720));
         g.setColour(juce::Colour(0xff2c3040));
-        g.fillRoundedRectangle(24.0f, 170.0f, getWidth() - 48.0f, 118.0f, 14.0f);
+        g.fillRoundedRectangle(24.0f, 205.0f, getWidth() - 48.0f, 118.0f, 14.0f);
         g.setColour(juce::Colour(0xff4bd18b));
-        g.fillRoundedRectangle(48.0f, 219.0f, (getWidth() - 96.0f) * inputMeter, 18.0f, 7.0f);
+        g.fillRoundedRectangle(48.0f, 254.0f, (getWidth() - 96.0f) * inputMeter, 18.0f, 7.0f);
         g.setColour(juce::Colours::white.withAlpha(0.75f));
-        g.drawText("Laptop microphone input", 48, 185, getWidth() - 96, 28, juce::Justification::centredLeft);
+        g.drawText("Live input level", 48, 220, getWidth() - 96, 28, juce::Justification::centredLeft);
         g.setColour(juce::Colours::white.withAlpha(0.45f));
-        g.drawText("Calibration plays seven quiet clicks. Avoid touching the laptop while it runs.",
-                   48, 250, getWidth() - 96, 24, juce::Justification::centredLeft);
+        g.drawText("Calibration plays seven audible clicks. Keep the microphone still while it runs.",
+                   48, 286, getWidth() - 96, 24, juce::Justification::centredLeft);
     }
 
     void resized() override
     {
         title.setBounds(32, 24, getWidth() - 64, 38);
-        backendSelector.setBounds(32, 74, 210, 36);
-        inputSelector.setBounds(252, 74, getWidth() - 284, 36);
-        outputSelector.setBounds(32, 122, getWidth() - 250, 36);
-        testSpeakers.setBounds(getWidth() - 208, 122, 176, 36);
-        calibrate.setBounds(32, 332, getWidth() - 64, 52);
-        status.setBounds(40, 410, getWidth() - 80, 125);
+        backendCaption.setBounds(32, 66, 210, 22);
+        inputCaption.setBounds(252, 66, getWidth() - 284, 22);
+        backendSelector.setBounds(32, 88, 210, 36);
+        inputSelector.setBounds(252, 88, getWidth() - 284, 36);
+        outputCaption.setBounds(32, 130, getWidth() - 64, 22);
+        outputSelector.setBounds(32, 152, getWidth() - 250, 36);
+        testSpeakers.setBounds(getWidth() - 208, 152, 176, 36);
+        calibrate.setBounds(32, 354, getWidth() - 64, 52);
+        status.setBounds(40, 424, getWidth() - 80, 110);
     }
 
 private:
+    void configureCaption(juce::Label& label, const juce::String& text)
+    {
+        label.setText(text, juce::dontSendNotification);
+        label.setFont(juce::FontOptions(14.0f, juce::Font::bold));
+        label.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.72f));
+        addAndMakeVisible(label);
+    }
+
     void populateBackends()
     {
         backendSelector.clear();
@@ -381,7 +396,10 @@ private:
         setup.outputChannels.setRange(0, 2, true);
         const auto error = deviceManager.setAudioDeviceSetup(setup, true);
         auto* device = deviceManager.getCurrentAudioDevice();
-        status.setText(error.isNotEmpty() ? error : ("Ready: " + (device ? device->getName() : setup.inputDeviceName)),
+        status.setText(error.isNotEmpty()
+                           ? error
+                           : ("Input: " + setup.inputDeviceName + "\nOutput: " + setup.outputDeviceName
+                              + "\nReady: " + (device ? device->getName() : setup.outputDeviceName)),
                        juce::dontSendNotification);
     }
 
@@ -412,7 +430,7 @@ private:
 
     juce::AudioDeviceManager deviceManager;
     CalibrationEngine engine;
-    juce::Label title, status;
+    juce::Label title, status, backendCaption, inputCaption, outputCaption;
     juce::TextButton calibrate, testSpeakers;
     juce::ComboBox backendSelector, inputSelector, outputSelector;
     std::vector<juce::String> backendNames;
