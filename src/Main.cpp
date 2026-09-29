@@ -15,7 +15,9 @@ constexpr double captureSeconds = 4.2;
 struct CalibrationResult
 {
     bool ok = false;
+    bool plausible = false;
     double latencyMs = 0.0;
+    double driverLatencyMs = 0.0;
     double scatterMs = 0.0;
     double confidence = 0.0;
     juce::String detail;
@@ -193,9 +195,13 @@ private:
         const auto noise = std::accumulate(envelope.begin(), envelope.end(), 0.0) / envelope.size();
         const auto strength = median(strengths);
         result.latencyMs = center * 1000.0 / sr;
+        result.driverLatencyMs = (inputLatency.load() + outputLatency.load()) * 1000.0 / sr;
         result.scatterMs = mad * 1000.0 / sr;
         result.confidence = juce::jlimit(0.0, 100.0, 20.0 * std::log10((strength + 1.0e-9) / (noise + 1.0e-9)) * 3.0);
         result.ok = result.scatterMs <= 2.0 && result.confidence >= 25.0;
+        result.plausible = result.latencyMs >= 3.0
+                        && result.latencyMs <= 120.0
+                        && result.latencyMs <= std::max(80.0, result.driverLatencyMs * 4.0);
         result.detail = "Driver reports " + juce::String(inputLatency.load() + outputLatency.load())
                       + " samples; acoustic measurement includes speakers, room, and microphone.";
         return result;
@@ -222,7 +228,7 @@ public:
     explicit MainComponent(juce::String commandLine)
         : autoMode(commandLine.contains("--auto-calibrate"))
     {
-        setSize(880, 560);
+        setSize(880, 620);
         title.setText("Simple Recorder - latency proof", juce::dontSendNotification);
         title.setFont(juce::FontOptions(26.0f, juce::Font::bold));
         title.setJustificationType(juce::Justification::centredLeft);
@@ -233,6 +239,7 @@ public:
         configureCaption(outputCaption, "Output device");
 
         status.setText("Opening audio devices…", juce::dontSendNotification);
+        status.setFont(juce::FontOptions(16.0f));
         status.setJustificationType(juce::Justification::topLeft);
         addAndMakeVisible(status);
 
@@ -257,21 +264,43 @@ public:
         {
             lastResult = r;
             attempt++;
-            const auto verdict = r.ok ? "PASS" : "NEEDS RETRY";
-            status.setText(verdict + juce::String("\nMeasured round trip: ")
-                           + juce::String(r.latencyMs, 2) + " ms\nScatter: "
-                           + juce::String(r.scatterMs, 2) + " ms\nConfidence: "
-                           + juce::String(r.confidence, 0) + "%\n" + r.detail,
-                           juce::dontSendNotification);
+            const bool usable = r.ok && r.plausible;
+            juce::String explanation;
+            if (usable)
+            {
+                explanation = "CALIBRATION SUCCESSFUL\n"
+                              "Your recording path is delayed by about " + juce::String(r.latencyMs, 1)
+                            + " ms. New recordings will be moved earlier by this amount so overdubs line up.\n"
+                              "The repeated clicks agreed within " + juce::String(r.scatterMs, 2)
+                            + " ms, so this measurement is reliable.";
+            }
+            else if (r.ok && !r.plausible)
+            {
+                explanation = "NEEDS ANOTHER CHECK\n"
+                              "The clicks were detected consistently, but the measured delay of "
+                            + juce::String(r.latencyMs, 1) + " ms is much higher than expected.\n"
+                              "The audio driver predicts about " + juce::String(r.driverLatencyMs, 1)
+                            + " ms. It would not be safe to shift recordings by the measured amount yet.\n"
+                              "Move the microphone closer to the speaker, reduce room noise, and run the test again.";
+            }
+            else
+            {
+                explanation = "CALIBRATION COULD NOT GET A RELIABLE READING\n"
+                              "The clicks did not arrive consistently enough to calculate a safe correction.\n"
+                              "Make the speaker test clearly audible, place the microphone closer, and try again.";
+            }
+            status.setText(explanation, juce::dontSendNotification);
             calibrate.setEnabled(true);
-            calibrate.setButtonText(r.ok ? "Run verification again" : "Retry calibration");
+            calibrate.setButtonText(usable ? "Verify calibration again" : "Try calibration again");
             if (autoMode)
             {
                 const auto output = juce::File::getCurrentWorkingDirectory()
                     .getChildFile("calibration-result.json");
                 juce::DynamicObject::Ptr object = new juce::DynamicObject();
                 object->setProperty("ok", r.ok);
+                object->setProperty("plausible", r.plausible);
                 object->setProperty("latencyMs", r.latencyMs);
+                object->setProperty("driverLatencyMs", r.driverLatencyMs);
                 object->setProperty("scatterMs", r.scatterMs);
                 object->setProperty("confidence", r.confidence);
                 object->setProperty("detail", r.detail);
@@ -320,7 +349,7 @@ public:
         outputSelector.setBounds(32, 152, getWidth() - 250, 36);
         testSpeakers.setBounds(getWidth() - 208, 152, 176, 36);
         calibrate.setBounds(32, 354, getWidth() - 64, 52);
-        status.setBounds(40, 424, getWidth() - 80, 110);
+        status.setBounds(40, 424, getWidth() - 80, 176);
     }
 
 private:
