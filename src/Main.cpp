@@ -199,7 +199,8 @@ private:
 class MainComponent final : public juce::Component, private juce::Timer
 {
 public:
-    MainComponent()
+    explicit MainComponent(juce::String commandLine)
+        : autoMode(commandLine.contains("--auto-calibrate"))
     {
         setSize(880, 560);
         title.setText("Simple Recorder — latency proof", juce::dontSendNotification);
@@ -231,6 +232,21 @@ public:
                            juce::dontSendNotification);
             calibrate.setEnabled(true);
             calibrate.setButtonText(r.ok ? "Run verification again" : "Retry calibration");
+            if (autoMode)
+            {
+                const auto output = juce::File::getCurrentWorkingDirectory()
+                    .getChildFile("calibration-result.json");
+                juce::DynamicObject::Ptr object = new juce::DynamicObject();
+                object->setProperty("ok", r.ok);
+                object->setProperty("latencyMs", r.latencyMs);
+                object->setProperty("scatterMs", r.scatterMs);
+                object->setProperty("confidence", r.confidence);
+                object->setProperty("detail", r.detail);
+                object->setProperty("device", deviceManager.getCurrentAudioDevice() != nullptr
+                                               ? deviceManager.getCurrentAudioDevice()->getName() : "unknown");
+                output.replaceWithText(juce::JSON::toString(juce::var(object.get()), true));
+                juce::JUCEApplication::getInstance()->systemRequestedQuit();
+            }
             repaint();
         };
 
@@ -329,6 +345,11 @@ private:
     void timerCallback() override
     {
         inputMeter = juce::jlimit(0.0f, 1.0f, std::sqrt(engine.getInputPeak()));
+        if (autoMode && !autoStarted && deviceManager.getCurrentAudioDevice() != nullptr)
+        {
+            autoStarted = true;
+            beginCalibration();
+        }
         repaint();
     }
 
@@ -342,6 +363,8 @@ private:
     CalibrationResult lastResult;
     float inputMeter = 0.0f;
     int attempt = 0;
+    bool autoMode = false;
+    bool autoStarted = false;
 };
 
 class RecorderApplication final : public juce::JUCEApplication
@@ -349,18 +372,21 @@ class RecorderApplication final : public juce::JUCEApplication
 public:
     const juce::String getApplicationName() override { return "Simple Recorder"; }
     const juce::String getApplicationVersion() override { return "0.1.0"; }
-    void initialise(const juce::String&) override { window = std::make_unique<Window>(getApplicationName()); }
+    void initialise(const juce::String& commandLine) override
+    {
+        window = std::make_unique<Window>(getApplicationName(), commandLine);
+    }
     void shutdown() override { window.reset(); }
 
 private:
     class Window final : public juce::DocumentWindow
     {
     public:
-        explicit Window(const juce::String& name)
+        Window(const juce::String& name, const juce::String& commandLine)
             : DocumentWindow(name, juce::Colour(0xff151720), allButtons)
         {
             setUsingNativeTitleBar(true);
-            setContentOwned(new MainComponent(), true);
+            setContentOwned(new MainComponent(commandLine), true);
             centreWithSize(getWidth(), getHeight());
             setVisible(true);
         }
