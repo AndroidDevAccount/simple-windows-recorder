@@ -44,6 +44,8 @@ public:
 
     bool isRunning() const noexcept { return running.load(); }
     float getInputPeak() const noexcept { return peakIn.load(); }
+    std::vector<float> getCapturedAudio() const { return capture; }
+    double getSampleRate() const noexcept { return sampleRate.load(); }
 
     void startSpeakerTest()
     {
@@ -222,13 +224,105 @@ private:
     std::atomic<long long> testTonePosition { 0 };
 };
 
+class CalibrationWaveformView final : public juce::Component
+{
+public:
+    void setResult(std::vector<float> newCapture, double newSampleRate, double newLatencyMs)
+    {
+        capture = std::move(newCapture);
+        sampleRate = newSampleRate;
+        latencyMs = newLatencyMs;
+        repaint();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.setColour(juce::Colour(0xff202431));
+        g.fillRoundedRectangle(getLocalBounds().toFloat(), 12.0f);
+        if (capture.empty() || sampleRate <= 0.0)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.55f));
+            g.drawText("Run calibration to see the played and recorded waveforms.",
+                       getLocalBounds(), juce::Justification::centred);
+            return;
+        }
+
+        const std::array<juce::String, 3> labels {
+            "1. Played by speakers",
+            "2. Recorded by microphone (arrived " + juce::String(latencyMs, 1) + " ms late)",
+            "3. Proposed fix (recording moved " + juce::String(latencyMs, 1) + " ms earlier)"
+        };
+        constexpr double viewStart = 0.45;
+        constexpr double viewEnd = 3.90;
+        const auto width = static_cast<float>(getWidth() - 34);
+        const auto left = 17.0f;
+        const auto rowHeight = static_cast<float>(getHeight()) / 3.0f;
+
+        for (int row = 0; row < 3; ++row)
+        {
+            const auto top = row * rowHeight;
+            const auto centre = top + rowHeight * 0.62f;
+            g.setColour(juce::Colours::white.withAlpha(0.72f));
+            g.setFont(juce::FontOptions(13.0f, juce::Font::bold));
+            g.drawText(labels[static_cast<size_t>(row)], static_cast<int>(left), static_cast<int>(top + 4),
+                       static_cast<int>(width), 20, juce::Justification::centredLeft);
+            g.setColour(juce::Colours::white.withAlpha(0.12f));
+            g.drawHorizontalLine(static_cast<int>(centre), left, left + width);
+
+            if (row == 0 || row == 2)
+                drawReference(g, left, width, centre, rowHeight * 0.25f, viewStart, viewEnd);
+            if (row == 1)
+                drawCapture(g, left, width, centre, rowHeight * 0.28f, viewStart, viewEnd, 0.0);
+            if (row == 2)
+                drawCapture(g, left, width, centre, rowHeight * 0.22f, viewStart, viewEnd,
+                            latencyMs / 1000.0);
+        }
+    }
+
+private:
+    static void drawReference(juce::Graphics& g, float left, float width, float centre,
+                              float amplitude, double start, double end)
+    {
+        g.setColour(juce::Colour(0xffffc857));
+        for (const auto click : clickTimes)
+        {
+            const auto x = left + static_cast<float>((click - start) / (end - start)) * width;
+            g.drawLine(x, centre - amplitude, x, centre + amplitude, 2.0f);
+        }
+    }
+
+    void drawCapture(juce::Graphics& g, float left, float width, float centre,
+                     float amplitude, double start, double end, double shiftEarlier) const
+    {
+        float peak = 1.0e-6f;
+        for (const auto sample : capture) peak = std::max(peak, std::abs(sample));
+        g.setColour(juce::Colour(0xff4bd18b));
+        const auto pixels = std::max(1, static_cast<int>(width));
+        for (int px = 0; px < pixels; ++px)
+        {
+            const auto t0 = start + (end - start) * px / pixels + shiftEarlier;
+            const auto t1 = start + (end - start) * (px + 1) / pixels + shiftEarlier;
+            auto i0 = juce::jlimit<size_t>(0, capture.size(), static_cast<size_t>(std::max(0.0, t0 * sampleRate)));
+            auto i1 = juce::jlimit<size_t>(i0, capture.size(), static_cast<size_t>(std::max(0.0, t1 * sampleRate)));
+            float localPeak = 0.0f;
+            for (auto i = i0; i < i1; ++i) localPeak = std::max(localPeak, std::abs(capture[i]));
+            const auto height = amplitude * localPeak / peak;
+            g.drawVerticalLine(static_cast<int>(left) + px, centre - height, centre + height);
+        }
+    }
+
+    std::vector<float> capture;
+    double sampleRate = 0.0;
+    double latencyMs = 0.0;
+};
+
 class MainComponent final : public juce::Component, private juce::Timer
 {
 public:
     explicit MainComponent(juce::String commandLine)
         : autoMode(commandLine.contains("--auto-calibrate"))
     {
-        setSize(880, 620);
+        setSize(880, 850);
         title.setText("Simple Recorder - latency proof", juce::dontSendNotification);
         title.setFont(juce::FontOptions(26.0f, juce::Font::bold));
         title.setJustificationType(juce::Justification::centredLeft);
@@ -259,14 +353,15 @@ public:
         testSpeakers.setButtonText("Test speakers");
         testSpeakers.onClick = [this] { engine.startSpeakerTest(); };
         addAndMakeVisible(testSpeakers);
+        addAndMakeVisible(waveforms);
 
         engine.onFinished = [this](CalibrationResult r)
         {
             lastResult = r;
             attempt++;
-            const bool usable = r.ok && r.plausible;
+            const bool usable = r.ok;
             juce::String explanation;
-            if (usable)
+            if (usable && r.plausible)
             {
                 explanation = "CALIBRATION SUCCESSFUL\n"
                               "Your recording path is delayed by about " + juce::String(r.latencyMs, 1)
@@ -274,14 +369,14 @@ public:
                               "The repeated clicks agreed within " + juce::String(r.scatterMs, 2)
                             + " ms, so this measurement is reliable.";
             }
-            else if (r.ok && !r.plausible)
+            else if (usable && !r.plausible)
             {
-                explanation = "NEEDS ANOTHER CHECK\n"
-                              "The clicks were detected consistently, but the measured delay of "
-                            + juce::String(r.latencyMs, 1) + " ms is much higher than expected.\n"
-                              "The audio driver predicts about " + juce::String(r.driverLatencyMs, 1)
-                            + " ms. It would not be safe to shift recordings by the measured amount yet.\n"
-                              "Move the microphone closer to the speaker, reduce room noise, and run the test again.";
+                explanation = "HIGH LATENCY DETECTED\n"
+                              "The microphone recording arrived " + juce::String(r.latencyMs, 1)
+                            + " ms after the sound was played. The driver only reports "
+                            + juce::String(r.driverLatencyMs, 1) + " ms.\n"
+                              "Proposed compensation: move new recordings " + juce::String(r.latencyMs, 1)
+                            + " ms earlier. Consider rechecking; otherwise we can try this correction and verify it with an overdub.";
             }
             else
             {
@@ -290,6 +385,7 @@ public:
                               "Make the speaker test clearly audible, place the microphone closer, and try again.";
             }
             status.setText(explanation, juce::dontSendNotification);
+            waveforms.setResult(engine.getCapturedAudio(), engine.getSampleRate(), r.latencyMs);
             calibrate.setEnabled(true);
             calibrate.setButtonText(usable ? "Verify calibration again" : "Try calibration again");
             if (autoMode)
@@ -348,8 +444,9 @@ public:
         outputCaption.setBounds(32, 130, getWidth() - 64, 22);
         outputSelector.setBounds(32, 152, getWidth() - 250, 36);
         testSpeakers.setBounds(getWidth() - 208, 152, 176, 36);
-        calibrate.setBounds(32, 354, getWidth() - 64, 52);
-        status.setBounds(40, 424, getWidth() - 80, 176);
+        calibrate.setBounds(32, 342, getWidth() - 64, 48);
+        waveforms.setBounds(32, 406, getWidth() - 64, 258);
+        status.setBounds(40, 680, getWidth() - 80, 150);
     }
 
 private:
@@ -459,6 +556,7 @@ private:
 
     juce::AudioDeviceManager deviceManager;
     CalibrationEngine engine;
+    CalibrationWaveformView waveforms;
     juce::Label title, status, backendCaption, inputCaption, outputCaption;
     juce::TextButton calibrate, testSpeakers;
     juce::ComboBox backendSelector, inputSelector, outputSelector;
