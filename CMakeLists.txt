@@ -21,6 +21,10 @@ target_compile_definitions(SimpleRecorder PRIVATE
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:SimpleRecorder,JUCE_VERSION>"
     JUCE_ASIO=1)
 
+if (MSVC)
+    target_compile_options(SimpleRecorder PRIVATE /utf-8)
+endif()
+
 target_link_libraries(SimpleRecorder PRIVATE
     juce::juce_audio_devices
     juce::juce_audio_formats

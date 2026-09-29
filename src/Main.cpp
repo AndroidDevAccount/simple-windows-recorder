@@ -203,7 +203,7 @@ public:
         : autoMode(commandLine.contains("--auto-calibrate"))
     {
         setSize(880, 560);
-        title.setText("Simple Recorder — latency proof", juce::dontSendNotification);
+        title.setText("Simple Recorder - latency proof", juce::dontSendNotification);
         title.setFont(juce::FontOptions(26.0f, juce::Font::bold));
         title.setJustificationType(juce::Justification::centredLeft);
         addAndMakeVisible(title);
@@ -212,7 +212,7 @@ public:
         status.setJustificationType(juce::Justification::topLeft);
         addAndMakeVisible(status);
 
-        calibrate.setButtonText("Calibrate speakers → microphone");
+        calibrate.setButtonText("Calibrate speakers to microphone");
         calibrate.onClick = [this] { beginCalibration(); };
         addAndMakeVisible(calibrate);
 
@@ -296,19 +296,33 @@ private:
                 for (const auto& output : type->getDeviceNames(false))
                 {
                     DeviceChoice choice { type->getTypeName(), input, output };
-                    if ((input.containsIgnoreCase("Microphone Array") && output.containsIgnoreCase("Speaker"))
-                        || (input.containsIgnoreCase("Focusrite") && output.containsIgnoreCase("Focusrite")))
+                    const bool laptopPair = input.containsIgnoreCase("Microphone Array")
+                                         && output.containsIgnoreCase("Speaker");
+                    const bool focusritePair = input.containsIgnoreCase("Focusrite")
+                                            && output.containsIgnoreCase("Focusrite");
+                    const bool focusriteToLaptop = input.containsIgnoreCase("Focusrite")
+                                                && output.containsIgnoreCase("Realtek");
+                    if (laptopPair || focusritePair || focusriteToLaptop)
                     {
                         choices.push_back(choice);
-                        deviceSelector.addItem(choice.type + ": " + input + " → " + output, id++);
+                        deviceSelector.addItem(choice.type + ": " + input + " -> " + output, id++);
                     }
                 }
         }
         if (!choices.empty())
         {
             auto preferred = 0;
+            auto bestScore = -1;
             for (int i = 0; i < static_cast<int>(choices.size()); ++i)
-                if (choices[static_cast<size_t>(i)].input.containsIgnoreCase("Microphone Array")) preferred = i;
+            {
+                const auto& candidate = choices[static_cast<size_t>(i)];
+                int score = 0;
+                if (candidate.input.containsIgnoreCase("Focusrite")) score += 20;
+                if (candidate.output.containsIgnoreCase("Realtek")) score += 10;
+                if (candidate.type.containsIgnoreCase("Windows Audio")) score += 5;
+                if (candidate.type.containsIgnoreCase("DirectSound")) score -= 2;
+                if (score > bestScore) { bestScore = score; preferred = i; }
+            }
             deviceSelector.setSelectedItemIndex(preferred, juce::sendNotificationSync);
         }
         else status.setText("No compatible input/output pair found.", juce::dontSendNotification);
