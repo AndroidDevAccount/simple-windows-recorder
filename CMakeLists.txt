@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(SimpleWindowsRecorder VERSION 0.1.0 LANGUAGES C CXX)
+project(SimpleWindowsRecorder VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,7 +12,10 @@ juce_add_gui_app(SimpleRecorder
     COMPANY_NAME "Simple Windows Recorder"
     BUNDLE_ID "org.simplewindowsrecorder.prototype")
 
-target_sources(SimpleRecorder PRIVATE src/Main.cpp)
+target_sources(SimpleRecorder PRIVATE
+    src/App.cpp src/StudioComponent.cpp src/SessionEngine.cpp
+    src/ProjectStore.cpp src/AudioPreferences.cpp src/CalibrationPanel.cpp
+    tests/EngineTests.cpp tests/ProjectTests.cpp)
 
 target_compile_definitions(SimpleRecorder PRIVATE
     JUCE_WEB_BROWSER=0
@@ -36,3 +39,6 @@ target_link_libraries(SimpleRecorder PRIVATE
     juce::juce_recommended_warning_flags)
 
 juce_generate_juce_header(SimpleRecorder)
+
+enable_testing()
+add_test(NAME recorder-regressions COMMAND SimpleRecorder --self-test)

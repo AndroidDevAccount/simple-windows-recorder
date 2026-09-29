@@ -15,6 +15,13 @@ jobs:
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
       - name: Build
         run: cmake --build build --config Release --parallel
+      - name: Regression tests
+        shell: pwsh
+        run: |
+          $test = Start-Process 'build/SimpleRecorder_artefacts/Release/Simple Recorder.exe' -ArgumentList '--self-test' -PassThru
+          if (-not $test.WaitForExit(60000)) { $test.Kill(); throw 'Regression tests timed out' }
+          Get-Content test-results.txt
+          if ($test.ExitCode -ne 0) { throw 'Regression tests failed' }
       - name: Upload prototype
         uses: actions/upload-artifact@v4
         with:

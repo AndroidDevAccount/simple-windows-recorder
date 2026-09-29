@@ -18,7 +18,20 @@ The first real acoustic test is recorded in
 4. Audio continues safely if drawing, saving, or analysis gets slow.
 5. Advanced controls are available, but not placed in the recording path.
 
-## Initial scope
+## Version 0.2: try a punch-in
+
+Arm the intended track with REC and choose its input. Click the timeline or
+double-click the clock and enter `00:30.00`. Press Record (R), then Stop
+(Space). Return (Enter) takes you back to the punch start. Recording replaces
+only the recorded span, never appends; Undo restores the old arrangement.
+Use Scarlett direct monitoring to hear yourself. Sessions autosave in
+Documents/Simple Recorder Sessions; keep each project's Media folder with it.
+
+See [current features, tests and limitations](docs/multitrack-handoff.md).
+Loop recording, crash recovery, effects, MIDI, drums and Genesis composition
+are not implemented yet. Auto level is currently an optional clip action.
+
+## Planned scope (not all implemented)
 
 - Windows 10/11
 - Focusrite Scarlett and built-in audio devices

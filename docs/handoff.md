@@ -1,5 +1,8 @@
 # Engineering handoff
 
+**Superseded by [the multitrack 0.2 handoff](multitrack-handoff.md).**
+Below is the historical calibration-only prototype handoff.
+
 ## Repository state
 
 - Language/framework: C++20, JUCE 9, CMake.
