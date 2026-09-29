@@ -7,6 +7,9 @@ DAW complexity until it is needed.
 The first engineering decision and proposed delivery plan are in
 [`docs/architecture.md`](docs/architecture.md).
 
+The first real acoustic test is recorded in
+[`docs/calibration-report-2026-09-29.md`](docs/calibration-report-2026-09-29.md).
+
 ## Product promises
 
 1. Recorded takes line up with what the musician heard.
