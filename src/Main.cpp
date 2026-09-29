@@ -322,6 +322,7 @@ public:
     explicit MainComponent(juce::String commandLine)
         : autoMode(commandLine.contains("--auto-calibrate"))
     {
+        initialiseSettings();
         setSize(880, 850);
         title.setText("Simple Recorder - latency proof", juce::dontSendNotification);
         title.setFont(juce::FontOptions(26.0f, juce::Font::bold));
@@ -353,6 +354,9 @@ public:
         testSpeakers.setButtonText("Test speakers");
         testSpeakers.onClick = [this] { engine.startSpeakerTest(); };
         addAndMakeVisible(testSpeakers);
+        saveDevices.setButtonText("Save devices");
+        saveDevices.onClick = [this] { saveCurrentSetup(); };
+        addAndMakeVisible(saveDevices);
         addAndMakeVisible(waveforms);
 
         engine.onFinished = [this](CalibrationResult r)
@@ -386,6 +390,11 @@ public:
             }
             status.setText(explanation, juce::dontSendNotification);
             waveforms.setResult(engine.getCapturedAudio(), engine.getSampleRate(), r.latencyMs);
+            if (usable)
+            {
+                acceptedCalibrationMs = r.latencyMs;
+                saveDevices.setButtonText("Save setup + delay");
+            }
             calibrate.setEnabled(true);
             calibrate.setButtonText(usable ? "Verify calibration again" : "Try calibration again");
             if (autoMode)
@@ -442,14 +451,46 @@ public:
         backendSelector.setBounds(32, 88, 210, 36);
         inputSelector.setBounds(252, 88, getWidth() - 284, 36);
         outputCaption.setBounds(32, 130, getWidth() - 64, 22);
-        outputSelector.setBounds(32, 152, getWidth() - 250, 36);
-        testSpeakers.setBounds(getWidth() - 208, 152, 176, 36);
+        outputSelector.setBounds(32, 152, getWidth() - 448, 36);
+        testSpeakers.setBounds(getWidth() - 404, 152, 176, 36);
+        saveDevices.setBounds(getWidth() - 218, 152, 186, 36);
         calibrate.setBounds(32, 342, getWidth() - 64, 48);
         waveforms.setBounds(32, 406, getWidth() - 64, 258);
         status.setBounds(40, 680, getWidth() - 80, 150);
     }
 
 private:
+    void initialiseSettings()
+    {
+        juce::PropertiesFile::Options options;
+        options.applicationName = "SimpleRecorder";
+        options.filenameSuffix = ".settings";
+        options.folderName = "SimpleWindowsRecorder";
+        options.osxLibrarySubFolder = "Application Support";
+        options.storageFormat = juce::PropertiesFile::storeAsXML;
+        settings = std::make_unique<juce::PropertiesFile>(options);
+        acceptedCalibrationMs = settings->getDoubleValue("calibrationMs", 0.0);
+    }
+
+    void saveCurrentSetup()
+    {
+        if (settings == nullptr) return;
+        settings->setValue("audioBackend", backendSelector.getText());
+        settings->setValue("inputDevice", inputSelector.getText());
+        settings->setValue("outputDevice", outputSelector.getText());
+        if (acceptedCalibrationMs > 0.0)
+            settings->setValue("calibrationMs", acceptedCalibrationMs);
+        settings->saveIfNeeded();
+        saveDevices.setButtonText("Devices saved");
+        status.setText("SETTINGS SAVED\nInput: " + inputSelector.getText()
+                       + "\nOutput: " + outputSelector.getText()
+                       + (acceptedCalibrationMs > 0.0
+                              ? "\nCompensation: move new recordings "
+                                + juce::String(acceptedCalibrationMs, 1) + " ms earlier."
+                              : juce::String()),
+                       juce::dontSendNotification);
+    }
+
     void configureCaption(juce::Label& label, const juce::String& text)
     {
         label.setText(text, juce::dontSendNotification);
@@ -469,8 +510,12 @@ private:
             backendSelector.addItem(type->getTypeName(), id++);
         }
         auto preferred = 0;
+        const auto savedBackend = settings != nullptr ? settings->getValue("audioBackend") : juce::String();
         for (int i = 0; i < static_cast<int>(backendNames.size()); ++i)
+        {
             if (backendNames[static_cast<size_t>(i)].containsIgnoreCase("Windows Audio")) preferred = i;
+            if (backendNames[static_cast<size_t>(i)] == savedBackend) preferred = i;
+        }
         if (!backendNames.empty())
             backendSelector.setSelectedItemIndex(preferred, juce::sendNotificationSync);
         else
@@ -494,10 +539,18 @@ private:
         for (int i = 0; i < outputNames.size(); ++i) outputSelector.addItem(outputNames[i], i + 1);
 
         int preferredInput = 0, preferredOutput = 0;
+        const auto savedInput = settings != nullptr ? settings->getValue("inputDevice") : juce::String();
+        const auto savedOutput = settings != nullptr ? settings->getValue("outputDevice") : juce::String();
         for (int i = 0; i < inputNames.size(); ++i)
+        {
             if (inputNames[i].containsIgnoreCase("Focusrite")) preferredInput = i;
+            if (inputNames[i] == savedInput) preferredInput = i;
+        }
         for (int i = 0; i < outputNames.size(); ++i)
+        {
             if (outputNames[i].containsIgnoreCase("Realtek")) preferredOutput = i;
+            if (outputNames[i] == savedOutput) preferredOutput = i;
+        }
         if (!inputNames.isEmpty()) inputSelector.setSelectedItemIndex(preferredInput, juce::dontSendNotification);
         if (!outputNames.isEmpty()) outputSelector.setSelectedItemIndex(preferredOutput, juce::dontSendNotification);
         applyDeviceSetup();
@@ -521,6 +574,7 @@ private:
         setup.inputChannels.setBit(0);
         setup.outputChannels.setRange(0, 2, true);
         const auto error = deviceManager.setAudioDeviceSetup(setup, true);
+        saveDevices.setButtonText("Save devices");
         auto* device = deviceManager.getCurrentAudioDevice();
         status.setText(error.isNotEmpty()
                            ? error
@@ -558,7 +612,7 @@ private:
     CalibrationEngine engine;
     CalibrationWaveformView waveforms;
     juce::Label title, status, backendCaption, inputCaption, outputCaption;
-    juce::TextButton calibrate, testSpeakers;
+    juce::TextButton calibrate, testSpeakers, saveDevices;
     juce::ComboBox backendSelector, inputSelector, outputSelector;
     std::vector<juce::String> backendNames;
     juce::StringArray inputNames, outputNames;
@@ -567,6 +621,8 @@ private:
     int attempt = 0;
     bool autoMode = false;
     bool autoStarted = false;
+    double acceptedCalibrationMs = 0.0;
+    std::unique_ptr<juce::PropertiesFile> settings;
 };
 
 class RecorderApplication final : public juce::JUCEApplication
