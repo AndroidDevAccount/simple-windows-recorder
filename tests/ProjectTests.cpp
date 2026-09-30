@@ -68,7 +68,7 @@ bool runProjectTests(juce::String& report)
         return fail("could not write floating-point source WAVs");
 
     Session source;
-    source.name = "Punch round trip"; source.bpm = 113; source.metronome = true; source.countInBars = 0;
+    source.name = "Punch round trip"; source.bpm = 113; source.metronome = true; source.countInBars = 0;source.masterGain=0.5f;
     Track guitar;
     guitar.id = "guitar"; guitar.name = "Guitar input 2"; guitar.inputChannel = 1;
     guitar.armed = true; guitar.solo = true; guitar.gain = 0.5f;
@@ -94,7 +94,7 @@ bool runProjectTests(juce::String& report)
     if (auto result = loadProject(restored, project, playhead); result.failed())
         return fail(result.getErrorMessage());
     if (restored.name != source.name || !near(restored.bpm, 113.0) || !restored.metronome
-        || restored.countInBars != 0 || !near(playhead, 30.25) || restored.tracks.size() != 3)
+        || restored.countInBars != 0 || !near(restored.masterGain,0.5) || !near(playhead, 30.25) || restored.tracks.size() != 3)
         return fail("session name, tempo, metronome, disabled count-in, playhead or tracks changed after reload");
     const auto& restoredGuitar = restored.tracks[0];
     if (restoredGuitar.id != guitar.id || restoredGuitar.name != guitar.name || !restoredGuitar.armed
@@ -133,13 +133,21 @@ bool runProjectTests(juce::String& report)
     for (int channel = 0; channel < 2; ++channel)
     {
         const auto sample = [&] (double seconds) { return rendered.getSample(channel, (int)std::llround(seconds * rate)); };
-        if (!near(sample(10.0), 0.0, 1.0e-6) || !near(sample(29.5), 0.075, 2.0e-6)
-            || !near(sample(30.5), 0.12, 2.0e-6) || !near(sample(31.0), 0.16, 2.0e-6)
-            || !near(sample(32.5), 0.075, 2.0e-6))
+        if (!near(sample(10.0), 0.0, 1.0e-6) || !near(sample(29.5), 0.0375, 2.0e-6)
+            || !near(sample(30.5), 0.06, 2.0e-6) || !near(sample(31.0), 0.08, 2.0e-6)
+            || !near(sample(32.5), 0.0375, 2.0e-6))
             return fail("export does not preserve outside audio, corrected marker, punch replacement, gain or mute/solo");
     }
     reader.reset();
     report += "PASS project: exported stereo WAV preserves old audio around the punch and the compensated marker at 31 s\n";
+
+    auto mixLevel=analyseMixLevel(restored,rate);
+    if(!mixLevel.valid||mixLevel.samplePeakDb>-20||mixLevel.rating!="MIX IS QUIET"||mixLevel.suggestedMasterDb<=0)
+        return fail("mix check did not identify the deliberately quiet processed fixture");
+    Clip quiet;quiet.sampleRate=rate;quiet.lengthSeconds=1;quiet.audio=std::make_shared<juce::AudioBuffer<float>>(1,rate);juce::FloatVectorOperations::fill(quiet.audio->getWritePointer(0),0.1f,rate);
+    const auto inputLevel=analyseRecordingLevel(quiet);
+    if(!inputLevel.valid||!near(inputLevel.peakDb,-20.0,0.05)||inputLevel.rating!="SAFE, SLIGHTLY QUIET")return fail("input health guidance misclassified a -20 dBFS take");
+    report += "PASS project: saved Master affects export; input health and processed LUFS/peak mix guidance are deterministic\n";
 
     auto broken = source;
     broken.tracks[0].clips[0].file = media.getChildFile("missing.wav");

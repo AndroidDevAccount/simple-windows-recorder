@@ -39,6 +39,7 @@ struct Session
     double bpm = 100.0;
     bool metronome = false;
     int countInBars = 1;
+    float masterGain = 1.0f;
     std::vector<Track> tracks;
 };
 

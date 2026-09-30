@@ -15,6 +15,8 @@ constexpr int headerWidth = 242, rulerHeight = 38, trackHeight = 233;
 constexpr double tunerHoldMs = 1800.0, tunerFadeStartMs = 1200.0;
 const juce::Colour bg(0xff10151e), panel(0xff19212e), ink(0xffe8edf5), muted(0xff94a3b8), accent(0xff5ee0b5), red(0xffff657a);
 float waveformSample(float raw,const Clip& clip,const Track& track) noexcept{return raw*(float)clip.gain*track.gain;}
+float waveformDisplay(float sample) noexcept{const float magnitude=std::abs(sample);const float shown=magnitude<=1.0f?std::sqrt(magnitude):1.0f+std::min(0.28f,(magnitude-1.0f)*0.25f);return std::copysign(shown,sample);}
+juce::String inputRating(double peakDb){return peakDb>=-0.5?"CLIPPING":peakDb>-3?"HOT":peakDb>=-18?"HEALTHY":peakDb>=-24?"SAFE / QUIET":"QUIET";}
 void updateHeldPitch(PitchResult& displayed,double& lastValid,float& opacity,const PitchResult* measured,double now,bool audioAvailable)
 {
     if(!audioAvailable){displayed={};lastValid=0;opacity=0;return;}
@@ -227,12 +229,12 @@ public:
                     visibleRawPeak=std::max(visibleRawPeak,std::max(max,-min));
                     const float shownMin=waveformSample(min,clip,track),shownMax=waveformSample(max,clip,track);
                     g.setColour(std::max(shownMax,-shownMin)>1.0f?red:colour);
-                    g.drawVerticalLine(px,waveformCentre-juce::jlimit(0.0f,1.28f,shownMax)*fullScale,
-                                          waveformCentre-juce::jlimit(-1.28f,0.0f,shownMin)*fullScale+0.6f);
+                    g.drawVerticalLine(px,waveformCentre-waveformDisplay(shownMax)*fullScale,
+                                          waveformCentre-waveformDisplay(shownMin)*fullScale+0.6f);
                 }
                 if(w>275&&visibleRawPeak>0)
                 {const auto rawDb=juce::Decibels::gainToDecibels(visibleRawPeak,-60.0f);const auto adjustedDb=juce::Decibels::gainToDecibels(visibleRawPeak*displayGain,-60.0f);
-                const auto peakText="Visible peak "+juce::String(rawDb,1)+" dBFS  →  "+juce::String(adjustedDb,1)+" dBFS with Gain (pre-FX)";
+                const auto peakText=inputRating(rawDb)+" INPUT  |  raw "+juce::String(rawDb,1)+" dBFS  →  "+juce::String(adjustedDb,1)+" dBFS with Gain (pre-FX)";
                 g.setColour(adjustedDb>0?red:ink.withAlpha(0.72f));g.setFont(10.0f);g.drawText(peakText,(int)x+110,y+13,std::max(0,(int)w-120),16,juce::Justification::right,true);}
             }
             if (owner.engine.isRecording() && track.armed && !owner.engine.isCountingIn())
@@ -251,7 +253,7 @@ public:
                     const float px=owner.xAt(peak.seconds);if(px<headerWidth||px>=getWidth())continue;
                     const float low=peak.low*track.gain,high=peak.high*track.gain;
                     g.setColour(std::max(high,-low)>=1.0f?red:ink);
-                    g.drawLine(px,waveformCentre-juce::jlimit(0.0f,1.28f,high)*fullScale,px,waveformCentre-juce::jlimit(-1.28f,0.0f,low)*fullScale+0.7f,std::max(1.0f,(float)(peak.length*owner.pixelsPerSecond)));
+                    g.drawLine(px,waveformCentre-waveformDisplay(high)*fullScale,px,waveformCentre-waveformDisplay(low)*fullScale+0.7f,std::max(1.0f,(float)(peak.length*owner.pixelsPerSecond)));
                     }
                 }
             }
@@ -371,8 +373,8 @@ StudioComponent::StudioComponent(bool preview) : previewMode(preview)
     look.setColour(juce::Slider::trackColourId, accent.darker(0.4f));
     look.setColour(juce::ToggleButton::textColourId, muted);
     setLookAndFeel(&look); setWantsKeyboardFocus(true);
-    for (auto* c : std::initializer_list<juce::Component*>{&name,&clock,&tempoLabel,&latencyLabel,&status,&guide,&zoomLabel,&tempo,&zoom,&clickButton,&countButton,&viewport,&scroll}) addAndMakeVisible(c);
-    for (auto* b : {&newButton,&openButton,&saveButton,&exportButton,&settingsButton,&homeButton,&playButton,&stopButton,&recordButton,&returnButton,&addButton,&importButton,&splitButton,&deleteButton,&undoButton,&redoButton,&levelButton})
+    for (auto* c : std::initializer_list<juce::Component*>{&name,&clock,&tempoLabel,&latencyLabel,&status,&guide,&zoomLabel,&masterLabel,&tempo,&zoom,&masterGain,&clickButton,&countButton,&viewport,&scroll}) addAndMakeVisible(c);
+    for (auto* b : {&newButton,&openButton,&saveButton,&exportButton,&settingsButton,&homeButton,&playButton,&stopButton,&recordButton,&returnButton,&addButton,&importButton,&splitButton,&deleteButton,&undoButton,&redoButton,&levelButton,&mixCheckButton})
     { addAndMakeVisible(b); b->setWantsKeyboardFocus(false); }
     recordButton.setColour(juce::TextButton::buttonColourId, red.darker(0.35f));
     playButton.setColour(juce::TextButton::buttonColourId, accent.darker(0.65f));
@@ -387,13 +389,17 @@ StudioComponent::StudioComponent(bool preview) : previewMode(preview)
     tempo.onValueChange = [this] { if(editable()) { engine.session().bpm = tempo.getValue(); changed(); } };
     zoom.setRange(8,180,1); zoom.setValue(pixelsPerSecond); zoom.setSliderStyle(juce::Slider::LinearHorizontal); zoom.setTextBoxStyle(juce::Slider::NoTextBox,false,0,0);
     zoom.onValueChange = [this] { pixelsPerSecond = zoom.getValue(); resized(); };
+    masterLabel.setText("Master",juce::dontSendNotification);masterLabel.setFont(juce::FontOptions(11.0f,juce::Font::bold));
+    masterGain.setSliderStyle(juce::Slider::LinearHorizontal);masterGain.setTextBoxStyle(juce::Slider::TextBoxRight,false,54,22);masterGain.setRange(-24,12,0.1);masterGain.setTextValueSuffix(" dB");masterGain.setDoubleClickReturnValue(true,0);
+    masterGain.setTooltip("Nondestructive gain after all tracks and effects. Double-click for 0 dB. Use Mix check before raising it.");
+    masterGain.onDragStart=[this]{if(editable())checkpoint();};masterGain.onValueChange=[this]{if(editable()){engine.session().masterGain=juce::Decibels::decibelsToGain((float)masterGain.getValue());changed();}};
     clickButton.onClick = [this] { if(editable()) { checkpoint();engine.session().metronome = clickButton.getToggleState(); changed(true); } };
     countButton.onClick = [this] { if(editable()) { engine.session().countInBars = countButton.getToggleState() ? 1 : 0; changed(); } };
     newButton.onClick=[this]{newSession();}; openButton.onClick=[this]{openSession();}; saveButton.onClick=[this]{save(true);}; exportButton.onClick=[this]{exportFile();}; settingsButton.onClick=[this]{openAudioSetup();};
     homeButton.onClick=[this]{setPlayhead(0); viewStart=0; resized();}; returnButton.onClick=[this]{setPlayhead(lastRecordStart);};
     playButton.onClick=[this]{beginPlay();}; stopButton.onClick=[this]{stopTransport();}; recordButton.onClick=[this]{beginRecord();};
     addButton.onClick=[this]{addTrack();}; importButton.onClick=[this]{importFile();}; splitButton.onClick=[this]{splitSelected();}; deleteButton.onClick=[this]{deleteSelected();};
-    undoButton.onClick=[this]{undo(false);}; redoButton.onClick=[this]{undo(true);}; levelButton.onClick=[this]{autoLevel();};
+    undoButton.onClick=[this]{undo(false);}; redoButton.onClick=[this]{undo(true);}; levelButton.onClick=[this]{autoLevel();};mixCheckButton.onClick=[this]{checkMix();};
     timeline = std::make_unique<Timeline>(*this); viewport.setViewedComponent(timeline.get(), false); viewport.setScrollBarsShown(true, false);
     // The UI timer reads the horizontal scrollbar without involving the audio callback.
     juce::PropertiesFile::Options options; options.applicationName="Workspace"; options.filenameSuffix=".settings"; options.folderName="SimpleWindowsRecorder"; options.osxLibrarySubFolder="Application Support";
@@ -404,7 +410,7 @@ StudioComponent::StudioComponent(bool preview) : previewMode(preview)
     defaultTracksButton.onClick=[this]{if(!editable())return;checkpoint();for(auto& track:engine.session().tracks)track.inputChannel=-1;changed(true);message("All tracks now follow the saved default recording input.");};
     defaultInputSelector.setTooltip("Saved default recording input. New tracks all follow this. Track menus can explicitly override it.");
     defaultInputSelector.onChange=[this]{if(!editable())return;defaultInput=defaultInputSelector.getSelectedId()-1;engine.setDefaultInput(defaultInput);if(!previewMode){workspace->setValue("defaultInput",defaultInput);workspace->saveIfNeeded();}message("Default recording input: "+inputDescription(defaultInput));changed(true);};
-    diagnosticsButton.onClick=[this]{showDiagnostics("Take One 0.6.2\nAudio status: "+audioSetup.message+"\nLatest error: "+observedError+"\nDefault input: "+inputDescription(defaultInput)+"\nProject: "+projectFile.getFullPathName());};
+    diagnosticsButton.onClick=[this]{showDiagnostics("Take One 0.7.0\nAudio status: "+audioSetup.message+"\nLatest error: "+observedError+"\nDefault input: "+inputDescription(defaultInput)+"\nProject: "+projectFile.getFullPathName());};
     retryButton.onClick=[this]{retryAudio();};
     tunerTitle.setText("NOTE MONITOR",juce::dontSendNotification);tunerTitle.setFont(juce::FontOptions(11.0f,juce::Font::bold));
     tunerDisplay.setFont(juce::FontOptions(15.0f,juce::Font::bold));
@@ -429,7 +435,7 @@ StudioComponent::~StudioComponent()
     viewport.setViewedComponent(nullptr, false); trackHeaders.clear(); timeline.reset();
     setLookAndFeel(nullptr);
 }
-bool StudioComponent::editable() const { return !engine.isBusy() && !exporting && !audioWindow && !chooserPending; }
+bool StudioComponent::editable() const { return !engine.isBusy() && !exporting && !checkingMix && !audioWindow && !chooserPending; }
 void StudioComponent::message(const juce::String& s) {if(s!=status.getText())logEvent(s);status.setText(s, juce::dontSendNotification); }
 void StudioComponent::timelineRepaint() { timeline->repaint(); for(auto& h:trackHeaders)h->repaint(); }
 void StudioComponent::checkpoint() { history.push_back(engine.session()); if(history.size()>30) history.erase(history.begin()); future.clear(); }
@@ -508,6 +514,12 @@ void StudioComponent::autoLevel()
     const int first=juce::jlimit(0,c->audio->getNumSamples(),(int)(c->sourceOffsetSeconds*c->sampleRate));
     const int n=juce::jlimit(0,c->audio->getNumSamples()-first,(int)(c->lengthSeconds*c->sampleRate));
     const auto peak=c->audio->getMagnitude(first,n); c->gain=peak>0.0001f?juce::jlimit(0.1,16.0,0.5/(double)peak):1.0; changed(); message("Clip playback level adjusted. Original recording is unchanged.");
+}
+void StudioComponent::checkMix()
+{
+    if(!editable())return;if(engine.session().tracks.empty()){message("Record or import something before checking the mix.");return;}
+    checkingMix=true;updateControls();message("Checking the processed mix loudness and headroom...");
+    mixAnalysisTask=std::async(std::launch::async,[session=engine.session()]{return analyseMixLevel(session);});
 }
 void StudioComponent::undo(bool redo)
 {
@@ -593,13 +605,13 @@ void StudioComponent::rebuildTracks()
 {
     trackHeaders.clear();
     for(int i=0;i<(int)engine.session().tracks.size();++i) {auto h=std::make_unique<TrackHeader>(*this,i); timeline->addAndMakeVisible(*h); trackHeaders.push_back(std::move(h));}
-    name.setText(engine.session().name,juce::dontSendNotification); tempo.setValue(engine.session().bpm,juce::dontSendNotification); clickButton.setToggleState(engine.session().metronome,juce::dontSendNotification); countButton.setToggleState(engine.session().countInBars>0,juce::dontSendNotification); resized(); updateControls();
+    name.setText(engine.session().name,juce::dontSendNotification);tempo.setValue(engine.session().bpm,juce::dontSendNotification);clickButton.setToggleState(engine.session().metronome,juce::dontSendNotification);countButton.setToggleState(engine.session().countInBars>0,juce::dontSendNotification);masterGain.setValue(juce::Decibels::gainToDecibels(engine.session().masterGain,-24.0f),juce::dontSendNotification);resized();updateControls();
 }
 void StudioComponent::updateControls()
 {
     const bool can=editable();
     defaultInputSelector.setEnabled(can);retryButton.setEnabled(can&&!applicationFault);defaultTracksButton.setEnabled(can);
-    for(auto* c:std::initializer_list<juce::Component*>{&newButton,&openButton,&saveButton,&exportButton,&settingsButton,&homeButton,&returnButton,&playButton,&recordButton,&addButton,&importButton,&splitButton,&deleteButton,&levelButton,&tempo,&clickButton,&countButton,&name,&clock}) c->setEnabled(can);
+    for(auto* c:std::initializer_list<juce::Component*>{&newButton,&openButton,&saveButton,&exportButton,&settingsButton,&homeButton,&returnButton,&playButton,&recordButton,&addButton,&importButton,&splitButton,&deleteButton,&levelButton,&mixCheckButton,&masterGain,&tempo,&clickButton,&countButton,&name,&clock}) c->setEnabled(can);
     stopButton.setEnabled(engine.isBusy()); undoButton.setEnabled(can&&!history.empty()); redoButton.setEnabled(can&&!future.empty());
     playButton.setEnabled(can&&engine.sampleRate()>0&&!applicationFault);recordButton.setEnabled(can&&engine.sampleRate()>0&&!applicationFault);
     const bool offline=!previewMode&&engine.sampleRate()<=0;
@@ -613,7 +625,11 @@ void StudioComponent::timerCallback()
 {
     LivePeak peak;while(engine.readLivePeak(peak))if(juce::isPositiveAndBelow(peak.track,(int)livePeaks.size()))
     {auto& bins=livePeaks[(size_t)peak.track];if(bins.size()<180001)bins.push_back(peak);}
-    if(engine.poll()) {dirty=true;pendingRebuild=true;message("Take saved. Punch-in replaced only the recorded span. Undo restores the previous take.");}
+    if(engine.poll())
+    {dirty=true;pendingRebuild=true;juce::String advice;
+    for(const auto& track:engine.session().tracks)if(track.armed)for(const auto& clip:track.clips)if(std::abs(clip.startSeconds-lastRecordStart)<0.002)
+    {const auto level=analyseRecordingLevel(clip);if(level.valid)advice<<track.name+": "+level.rating+" — raw peak "+juce::String(level.peakDb,1)+" dBFS, active average "+juce::String(level.activeRmsDb,1)+" dBFS. "+level.advice;break;}
+    message(advice.isNotEmpty()?advice:"Take saved. Punch-in replaced only the recorded span. Undo restores the previous take.");}
     if(returnAfterRecording&&!engine.isBusy()) {returnAfterRecording=false;viewStart=recordViewStart;dirty=true;resized();}
     const double now=juce::Time::getMillisecondCounterHiRes();
     PitchResult measured;const bool hasMeasurement=engine.pollPitch(measured);
@@ -629,6 +645,11 @@ void StudioComponent::timerCallback()
     repaint(0,192,getWidth(),42);
     const auto error=engine.lastError(); if(error.isNotEmpty() && error!=observedError) {observedError=error;message("ERROR: "+error);if(engine.sampleRate()<=0){devices.removeAudioCallback(&engine);devices.closeAudioDevice();}}
     if(exporting && exportTask.valid() && exportTask.wait_for(std::chrono::seconds(0))==std::future_status::ready) {auto r=exportTask.get();exporting=false;message(r.wasOk()?"Stereo WAV exported.":r.getErrorMessage());}
+    if(checkingMix&&mixAnalysisTask.valid()&&mixAnalysisTask.wait_for(std::chrono::seconds(0))==std::future_status::ready)
+    {const auto analysis=mixAnalysisTask.get();checkingMix=false;if(!analysis.valid)message("Mix check could not find enough audible material.");else
+    {const double current=juce::Decibels::gainToDecibels(engine.session().masterGain,-24.0f),suggested=juce::jlimit(-24.0,12.0,current+analysis.suggestedMasterDb);
+    const auto text="Integrated loudness: "+juce::String(analysis.loudnessLufs,1)+" LUFS\nSample peak: "+juce::String(analysis.samplePeakDb,1)+" dBFS\n\n"+analysis.advice+"\n\nSuggested Master: "+juce::String(suggested,1)+" dB (a "+(analysis.suggestedMasterDb>=0?"+":"")+juce::String(analysis.suggestedMasterDb,1)+" dB change). This is guidance, not automatic mastering.";
+    message(analysis.rating+" — "+juce::String(analysis.loudnessLufs,1)+" LUFS, "+juce::String(analysis.samplePeakDb,1)+" dBFS peak.");juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,analysis.rating,text,"Got it");}}
     if(pendingRebuild&&!engine.isBusy()) {pendingRebuild=false;rebuildTracks();}
     if(dirty && editable()) save();
     const double p=engine.position();
@@ -638,7 +659,7 @@ void StudioComponent::timerCallback()
     if(engine.isBusy() && p>viewStart+viewDuration()*0.95) {viewStart=std::max(0.0,p-viewDuration()*0.2);resized();}
     else if(std::abs(scroll.getCurrentRangeStart()-viewStart)>0.001) {viewStart=scroll.getCurrentRangeStart();}
     updateControls(); timeline->refreshTransportCursor();timeline->repaint();
-    if(closing && !engine.isBusy() && !exporting) {if(save())juce::JUCEApplication::getInstance()->quit();else closing=false;}
+    if(closing&&!engine.isBusy()&&!exporting&&!checkingMix){if(save())juce::JUCEApplication::getInstance()->quit();else closing=false;}
 }
 bool StudioComponent::keyPressed(const juce::KeyPress& k)
 {
@@ -650,12 +671,11 @@ bool StudioComponent::keyPressed(const juce::KeyPress& k)
     if(k.getKeyCode()==juce::KeyPress::returnKey) {setPlayhead(lastRecordStart);return true;}
     return false;
 }
-void StudioComponent::requestClose() {closing=true;if(engine.isBusy())engine.stop();else if(!exporting){if(save())juce::JUCEApplication::getInstance()->quit();else closing=false;}}
+void StudioComponent::requestClose(){closing=true;if(engine.isBusy())engine.stop();else if(!exporting&&!checkingMix){if(save())juce::JUCEApplication::getInstance()->quit();else closing=false;}}
 void StudioComponent::paint(juce::Graphics& g)
 {
     g.fillAll(bg);g.setColour(panel);g.fillRect(0,68,getWidth(),76);g.setColour(accent);g.fillRoundedRectangle(20,22,5,28,2);
     g.setColour(muted);g.setFont(11.0f);
-    g.drawText("Space play/stop   R record   Enter return   Ctrl+Z undo",280,getHeight()-28,getWidth()-300,18,juce::Justification::right);
     const float middle=(float)getWidth()-115;
     g.setColour(muted);g.drawLine(middle-70,217,middle+70,217,1);g.drawLine(middle,210,middle,224,1);
     if(pitch.midi>=0){g.setColour((std::abs(pitch.cents)<=5?accent:juce::Colour(0xffffc778)).withMultipliedAlpha(pitchOpacity));const float x=middle+(float)juce::jlimit(-50.0,50.0,pitch.cents)*1.4f;g.fillEllipse(x-4,213,8,8);}
@@ -672,6 +692,7 @@ void StudioComponent::resized()
     tempoLabel.setBounds(502,76,44,18);tempo.setBounds(502,97,82,26); clickButton.setBounds(596,80,62,24);countButton.setBounds(596,107,90,24);
     latencyLabel.setBounds(694,76,std::max(80,w-710),24);latencyLabel.setFont(12.0f);latencyLabel.setColour(juce::Label::textColourId,muted);
     defaultInputSelector.setBounds(694,107,std::max(100,w-710),25);diagnosticsButton.setBounds(18,h-30,112,24);retryButton.setBounds(138,h-30,100,24);defaultTracksButton.setBounds(246,h-30,140,24);
+    masterLabel.setBounds(w-455,h-30,48,24);masterGain.setBounds(w-407,h-30,160,24);mixCheckButton.setBounds(w-237,h-30,100,24);
     x=18;for(auto* b:{&addButton,&importButton,&undoButton,&redoButton,&splitButton,&deleteButton,&levelButton}){const int width=b==&importButton?104:(b==&levelButton?84:66);b->setBounds(x,157,width,27);x+=width+6;}
     zoomLabel.setBounds(w-190,157,40,27);zoom.setBounds(w-150,157,130,27);
     tunerTitle.setBounds(18,198,105,30);tunerInput.setBounds(126,200,95,26);tunerDisplay.setBounds(230,197,std::max(300,w-455),32);
@@ -684,6 +705,7 @@ void StudioComponent::resized()
 bool StudioComponent::runFeedbackUiChecks(juce::String& report)
 {
     {Track track;track.gain=2.0f;Clip clip;clip.gain=0.5;if(std::abs(waveformSample(0.75f,clip,track)-0.75f)>1e-6f){report+="FAIL feedback UI: waveform gain disagrees with playback gain.\n";return false;}}
+    if(std::abs(waveformDisplay(0.25f)-0.5f)>1e-6f||waveformDisplay(1.0f)!=1.0f||waveformDisplay(1.2f)<=1.0f){report+="FAIL feedback UI: perceptual waveform scale lost the 0 dBFS reference.\n";return false;}
     {PitchResult held{440,0,69,1},silence{};double last=1000;float opacity=1;
     updateHeldPitch(held,last,opacity,&silence,1300,true);if(held.midi!=69||opacity<0.99f)return false;
     updateHeldPitch(held,last,opacity,nullptr,2500,true);if(held.midi!=69||opacity>=1||opacity<=0)return false;

@@ -4,6 +4,11 @@ Formerly Simple Windows Recorder. Version 0.6 adds a distinctive app icon,
 saved default recording input, explicit device routing, Retry audio and a
 copyable developer diagnostics window. See [routing and recovery](docs/reliability-and-routing.md).
 
+Version 0.7 adds perceptual waveform scaling, plain-language input-health
+advice after a take, saved nondestructive Master gain, and an offline Mix check
+for integrated LUFS, sample peak and a conservative suggested Master setting.
+See [how level guidance works](docs/level-guidance.md), including its limits.
+
 A musician-first multitrack recorder for Windows: arm a track, count in, record,
 and have the new take land in time. The product deliberately hides traditional
 DAW complexity until it is needed.

@@ -37,6 +37,7 @@ juce::Result saveProject(const Session& session, const juce::File& file, double 
     root->setProperty("bpm", session.bpm);
     root->setProperty("metronome", session.metronome);
     root->setProperty("countInBars", session.countInBars);
+    root->setProperty("masterGain",session.masterGain);
     root->setProperty("playhead", playhead);
     juce::Array<juce::var> tracks;
     for (const auto& track : session.tracks)
@@ -84,6 +85,7 @@ juce::Result loadProject(Session& session, const juce::File& file, double& playh
     next.bpm = juce::jlimit(40.0, 240.0, (double)json["bpm"]);
     next.metronome = (bool)json["metronome"];
     next.countInBars = juce::jlimit(0, 1, (int)json["countInBars"]);
+    {const double gain=json.hasProperty("masterGain")?(double)json["masterGain"]:1.0;next.masterGain=std::isfinite(gain)?(float)juce::jlimit(0.0,4.0,gain):1.0f;}
     std::map<juce::String, Clip> loaded;
     for (const auto& t : *json["tracks"].getArray())
     {
@@ -181,12 +183,65 @@ juce::Result exportMix(const Session& session, const juce::File& destination, do
             for (int i = 0; i < n; ++i)
             {
                 const float fade=end>dryEnd?(float)juce::jlimit(0.0,1.0,(end-(pos+i)/sampleRate)/0.1):1.0f;
-                block.setSample(ch,i,juce::jlimit(-1.0f,1.0f,block.getSample(ch,i)*fade));
+                block.setSample(ch,i,juce::jlimit(-1.0f,1.0f,block.getSample(ch,i)*session.masterGain*fade));
             }
         if (!writer->writeFromAudioSampleBuffer(block, 0, n)) return juce::Result::fail("The disk could not finish the export.");
     }
     writer.reset();
     if (!temporary.overwriteTargetFileWithTemporary()) return juce::Result::fail("Could not finish the export file.");
     return juce::Result::ok();
+}
+
+RecordingLevelAnalysis analyseRecordingLevel(const Clip& clip)
+{
+    RecordingLevelAnalysis result;
+    if(!clip.audio||clip.sampleRate<=0||clip.lengthSeconds<=0)return result;
+    const int first=juce::jlimit(0,clip.audio->getNumSamples(),(int)std::llround(clip.sourceOffsetSeconds*clip.sampleRate));
+    const int count=juce::jlimit(0,clip.audio->getNumSamples()-first,(int)std::llround(clip.lengthSeconds*clip.sampleRate));
+    if(count<=0)return result;
+    float peak=0;std::vector<double> windows;const int window=std::max(1,(int)std::llround(clip.sampleRate*0.05));
+    for(int pos=0;pos<count;pos+=window)
+    {const int n=std::min(window,count-pos);double energy=0;
+    for(int ch=0;ch<clip.audio->getNumChannels();++ch){const auto* data=clip.audio->getReadPointer(ch,first+pos);for(int i=0;i<n;++i){peak=std::max(peak,std::abs(data[i]));energy+=(double)data[i]*data[i];}}
+    windows.push_back(energy/(n*clip.audio->getNumChannels()));}
+    result.valid=true;result.peakDb=juce::Decibels::gainToDecibels(peak,-100.0f);
+    const double gate=std::pow(10.0,std::max(-55.0,result.peakDb-35.0)/10.0);double active=0;int activeCount=0;
+    for(const auto energy:windows)if(energy>=gate){active+=energy;++activeCount;}
+    result.activeRmsDb=activeCount?10*std::log10(active/activeCount):-100;
+    if(result.peakDb>=-0.5){result.rating="CLIPPING RISK";result.advice="Turn down the physical input gain on the interface and record again; the raw take is at the digital ceiling.";}
+    else if(result.peakDb>-3){result.rating="HOT";result.advice="The input is very hot. Lower the interface gain a little to leave room for unexpected peaks.";}
+    else if(result.peakDb>=-18){result.rating="HEALTHY INPUT";result.advice="The untouched recording has useful level and safe headroom. Set its place in the song with track Gain, not the interface knob.";}
+    else if(result.peakDb>=-24){result.rating="SAFE, SLIGHTLY QUIET";result.advice="This is clean and usable. You may raise the interface gain on the next take if hiss is noticeable, but software Gain is fine for mix balance.";}
+    else {result.rating="QUIET INPUT";result.advice="Raise the physical input gain on the interface for the next take. Software Gain can make this louder, but it also raises recorded noise.";}
+    return result;
+}
+
+MixLevelAnalysis analyseMixLevel(const Session& session,double sampleRate)
+{
+    MixLevelAnalysis result;double end=0,dryEnd=0;bool anySolo=false;
+    for(const auto& track:session.tracks){anySolo|=track.solo;for(const auto& clip:track.clips)dryEnd=end=std::max(end,clip.startSeconds+clip.lengthSeconds);}
+    if(end<=0||sampleRate<=0)return result;
+    for(const auto& track:session.tracks)if(!track.mute&&(!anySolo||track.solo))for(const auto& clip:track.clips)end=std::max(end,clip.startSeconds+clip.lengthSeconds+reverbTailSeconds(track.reverb));
+    juce::AudioBuffer<float> mix(2,1024),trackAudio(2,1024);std::vector<TrackEffects> effects(session.tracks.size());
+    for(size_t i=0;i<effects.size();++i)effects[i].prepare(session.tracks[i].effectPresetId,session.tracks[i].effectsBypassed,sampleRate,session.tracks[i].reverb);
+    using Coeff=juce::dsp::IIR::Coefficients<float>;juce::dsp::IIR::Filter<float> hpL,hpR,shelfL,shelfR;
+    hpL.coefficients=hpR.coefficients=Coeff::makeHighPass(sampleRate,38.135470876f,0.5003270373f);shelfL.coefficients=shelfR.coefficients=Coeff::makeHighShelf(sampleRate,1681.974451f,0.707175237f,juce::Decibels::decibelsToGain(4.0f));
+    const int loudnessWindow=std::max(1,(int)std::llround(sampleRate*0.4)),hop=std::max(1,(int)std::llround(sampleRate*0.1));
+    std::vector<double> ring((size_t)loudnessWindow),blocks;int ringPos=0,ringCount=0,hopCount=0;double rolling=0;float peak=0;
+    const auto total=(juce::int64)std::ceil(end*sampleRate);
+    for(juce::int64 pos=0;pos<total;pos+=1024)
+    {mix.clear();const int n=(int)std::min<juce::int64>(1024,total-pos);
+    for(size_t t=0;t<session.tracks.size();++t){const auto& track=session.tracks[t];if(track.mute||(anySolo&&!track.solo))continue;renderTrackAudio(track,pos/sampleRate,sampleRate,trackAudio.getWritePointer(0),trackAudio.getWritePointer(1),n);effects[t].process(trackAudio.getWritePointer(0),trackAudio.getWritePointer(1),n);for(int ch=0;ch<2;++ch)mix.addFrom(ch,0,trackAudio,ch,0,n,track.gain);}
+    for(int i=0;i<n;++i){const float fade=end>dryEnd?(float)juce::jlimit(0.0,1.0,(end-(pos+i)/sampleRate)/0.1):1.0f;const float left=mix.getSample(0,i)*session.masterGain*fade,right=mix.getSample(1,i)*session.masterGain*fade;peak=std::max({peak,std::abs(left),std::abs(right)});const float kl=shelfL.processSample(hpL.processSample(left)),kr=shelfR.processSample(hpR.processSample(right));const double energy=(double)kl*kl+(double)kr*kr;if(ringCount==loudnessWindow)rolling-=ring[(size_t)ringPos];else ++ringCount;ring[(size_t)ringPos]=energy;rolling+=energy;ringPos=(ringPos+1)%loudnessWindow;if(ringCount==loudnessWindow&&++hopCount>=hop){blocks.push_back(rolling/loudnessWindow);hopCount=0;}}}
+    if(blocks.empty())return result;
+    const auto loudness=[](double energy){return energy>0?-0.691+10*std::log10(energy):-100.0;};
+    double ungated=0;int count=0;for(double energy:blocks)if(loudness(energy)>-70){ungated+=energy;++count;}if(!count)return result;ungated/=count;const double relative=loudness(ungated)-10;double gated=0;count=0;for(double energy:blocks)if(loudness(energy)>-70&&loudness(energy)>relative){gated+=energy;++count;}if(!count)return result;
+    result.valid=true;result.loudnessLufs=loudness(gated/count);result.samplePeakDb=juce::Decibels::gainToDecibels(peak,-100.0f);result.suggestedMasterDb=juce::jlimit(-12.0,12.0,std::min(-14.0-result.loudnessLufs,-1.0-result.samplePeakDb));
+    if(result.samplePeakDb>=0){result.rating="MIX IS CLIPPING";result.advice="Lower Master or one or more tracks. The combined processed mix crosses 0 dBFS.";}
+    else if(result.loudnessLufs<-20){result.rating="MIX IS QUIET";result.advice="The combined mix is substantially quieter than a typical -14 LUFS reference. Raise Master only within the available peak headroom.";}
+    else if(result.loudnessLufs<-16){result.rating="MIX IS A LITTLE QUIET";result.advice="The balance may be fine, but the combined mix is below a typical streaming reference. A modest Master increase may help.";}
+    else if(result.loudnessLufs>-10||result.samplePeakDb>-0.5){result.rating="MIX IS HOT";result.advice="Lower Master to preserve headroom; loud platforms may turn this down anyway.";}
+    else {result.rating="MIX LEVEL LOOKS HEALTHY";result.advice="The processed mix has a practical overall loudness and peak headroom. Judge musical balance with your ears.";}
+    return result;
 }
 }

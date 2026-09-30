@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include "SessionEngine.h"
 #include "AudioPreferences.h"
+#include "ProjectStore.h"
 #include <future>
 
 namespace studio
@@ -35,6 +36,7 @@ private:
     void deleteSelected();
     void splitSelected();
     void autoLevel();
+    void checkMix();
     void undo(bool redo);
     void importFile();
     void exportFile();
@@ -68,10 +70,10 @@ private:
     std::vector<std::unique_ptr<TrackHeader>> trackHeaders;
     juce::TextButton newButton{"New"}, openButton{"Open"}, saveButton{"Save"}, exportButton{"Export WAV"}, settingsButton{"Audio setup"};
     juce::TextButton homeButton{"|<"}, playButton{"Play"}, stopButton{"Stop"}, recordButton{"Record"}, returnButton{"Return"};
-    juce::TextButton addButton{"+ Track"}, importButton{"Import audio"}, splitButton{"Split"}, deleteButton{"Delete"}, undoButton{"Undo"}, redoButton{"Redo"}, levelButton{"Auto level"};
+    juce::TextButton addButton{"+ Track"}, importButton{"Import audio"}, splitButton{"Split"}, deleteButton{"Delete"}, undoButton{"Undo"}, redoButton{"Redo"}, levelButton{"Auto level"},mixCheckButton{"Mix check"};
     juce::ToggleButton clickButton{"Click"}, countButton{"Count in"};
-    juce::Label name, clock, tempoLabel, latencyLabel, status, guide, zoomLabel;
-    juce::Slider tempo, zoom;
+    juce::Label name, clock, tempoLabel, latencyLabel, status, guide, zoomLabel,masterLabel;
+    juce::Slider tempo, zoom,masterGain;
     juce::ComboBox tunerInput;
     juce::ComboBox defaultInputSelector;
     juce::TextButton diagnosticsButton{"Diagnostics"},retryButton{"Retry audio"},defaultTracksButton{"Tracks to default"};
@@ -87,12 +89,13 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<juce::DocumentWindow> audioWindow;
     std::future<juce::Result> exportTask;
+    std::future<MixLevelAnalysis> mixAnalysisTask;
     std::vector<Session> history, future;
     juce::String selectedClipId;
     int selectedTrack = 0;
     double pixelsPerSecond = 32.0, viewStart = 0.0, lastRecordStart = 0.0;
     double displayedPosition = -1;
-    bool pendingRebuild = false, dirty = false, previewMode = false, exporting = false, closing = false, chooserPending = false;
+    bool pendingRebuild = false, dirty = false, previewMode = false, exporting = false, checkingMix=false,closing = false, chooserPending = false;
     juce::String observedError;
 };
 }

@@ -198,6 +198,9 @@ struct SessionEngine::Impl
                         channel==0?scratchLeft.data():scratchRight.data(),track.gain,n);
             }
         }
+        if(playback.masterGain!=1.0f)
+            for(int channel=0;channel<outputCount;++channel)
+                if(outputs[channel])juce::FloatVectorOperations::multiply(outputs[channel]+offset,playback.masterGain,count);
         if (playback.metronome)
             for (int i = 0; i < count; ++i)
             {
