@@ -11,7 +11,7 @@ class RecorderApplication final : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "Take One"; }
-    const juce::String getApplicationVersion() override { return "0.7.0"; }
+    const juce::String getApplicationVersion() override { return "0.8.0"; }
     bool moreThanOneInstanceAllowed() override
     { return getCommandLineParameters().contains("--self-test") || getCommandLineParameters().contains("--preview"); }
     void initialise(const juce::String& args) override

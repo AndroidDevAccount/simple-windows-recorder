@@ -5,10 +5,11 @@
 
 namespace studio
 {
-const std::array<EffectPreset, 6>& effectPresets()
+const std::array<EffectPreset, 7>& effectPresets()
 {
-    static const std::array<EffectPreset, 6> presets {{
+    static const std::array<EffectPreset, 7> presets {{
         {"dry", "Dry / no effects", "Your original sound, unchanged.", 0,0,0,0,0,0,1,0,0},
+        {"peak-tamer", "Peak tamer", "Shaves isolated spikes while leaving most of the performance alone.", 20,300,0,3000,0,-12,8,0.2f,80},
         {"lead-vocal", "Lead vocal", "A clearer vocal with less rumble and more even loud phrases.", 80,250,-2,3500,2,-18,3,10,100},
         {"warm-vocal", "Warm vocal", "A gentler vocal sound with less low-mid muddiness and a small clarity lift.", 65,300,-1.5f,2500,1,-20,2,20,140},
         {"acoustic-guitar", "Acoustic guitar", "Less boom, a little more string definition, and gentle control of strums.", 70,220,-2.5f,4000,2,-18,2,25,120},
@@ -25,13 +26,14 @@ const EffectPreset& effectPreset(const juce::String& id)
 juce::String describeEffectPreset(const juce::String& id)
 {
     const auto& p=effectPreset(id);
+    if(id=="peak-tamer")return juce::String(p.purpose)+"\n\n1. Subsonic filter: high-pass at 20 Hz; removes inaudible rumble without thinning the instrument.\n2. Fast compressor: 8:1 above -12 dBFS, 0.2 ms attack and 80 ms release; pulls an isolated transient toward the surrounding performance.\n3. Safety ceiling: catches any remaining sample above -1 dBFS, stereo-linked and without lookahead.\n\nPlayback/export only; the source WAV stays untouched. It is intended for occasional spikes, not repair of analog or converter clipping.";
     juce::String text(p.purpose);
     if(p.highPass>0)
     {
         text += "\n\n1. Rumble filter: high-pass at " + juce::String(p.highPass,0) + " Hz (12 dB/octave). Reduces deep rumble below this range.";
         text += "\n2. Body EQ: " + juce::String(p.lowMidDb,1) + " dB at " + juce::String(p.lowMidHz,0) + " Hz. Reduces boom and muddiness.";
         text += "\n3. Clarity EQ: +" + juce::String(p.presenceDb,1) + " dB at " + juce::String(p.presenceHz,0) + " Hz. Helps detail come through. Both EQ bands use Q 0.8.";
-        text += "\n4. Compressor: " + juce::String(p.ratio,1) + ":1 above " + juce::String(p.thresholdDb,0) + " dBFS; attack " + juce::String(p.attackMs,0) + " ms, release " + juce::String(p.releaseMs,0) + " ms. Turns down louder passages; no automatic makeup gain.";
+        text += "\n4. Compressor: " + juce::String(p.ratio,1) + ":1 above " + juce::String(p.thresholdDb,0) + " dBFS; attack " + juce::String(p.attackMs,1) + " ms, release " + juce::String(p.releaseMs,0) + " ms. Turns down louder passages; no automatic makeup gain.";
     }
     text += "\n\nApplies to this track's playback and WAV export only. Original recordings stay untouched. FX off bypasses this EQ/compressor preset; the separate Verb switch controls reverb. Stop playback before changing it. No added buffering latency, gate or live mic monitoring. These are starting points, not automatic fixes for every recording.";
     return text;
@@ -48,6 +50,7 @@ void TrackEffects::prepare(const juce::String& id, bool bypass, double rate, con
     if(settings.enabled && settings.mix>0){reverb=std::make_unique<TrackReverb>();reverb->prepare(settings,rate);}
     const auto& p=effectPreset(id);
     dry=bypass || p.highPass==0;
+    limiterCeiling=id=="peak-tamer"?juce::Decibels::decibelsToGain(-1.0f):2.0f;
     envelope=0;
     for(auto& channel:filters) for(auto& filter:channel) filter=Biquad{};
     if(dry) return;
@@ -65,23 +68,17 @@ void TrackEffects::prepare(const juce::String& id, bool bypass, double rate, con
     release=(float)std::exp(-1.0/(rate*p.releaseMs*0.001));
     threshold=p.thresholdDb; slope=1.0f/p.ratio-1.0f;
 }
-void TrackEffects::process(float* left,float* right,int count) noexcept
+void TrackEffects::process(float* left,float* right,int count,float postGain) noexcept
 {
-    if(dry) {if(reverb)reverb->process(left,right,count);return;}
-    juce::ScopedNoDenormals noDenormals;
-    for(int i=0;i<count;++i)
+    if(!dry)
     {
-        float l=left[i], r=right[i];
-        for(auto& f:filters[0]) l=f.tick(l);
-        for(auto& f:filters[1]) r=f.tick(r);
-        const float peak=std::max(std::abs(l),std::abs(r));
-        const float coefficient=peak>envelope?attack:release;
-        envelope=coefficient*envelope+(1-coefficient)*peak;
-        const float db=juce::Decibels::gainToDecibels(envelope,-100.0f);
-        const float gain=juce::Decibels::decibelsToGain(std::max(0.0f,db-threshold)*slope);
-        left[i]=l*gain; right[i]=r*gain;
+        juce::ScopedNoDenormals noDenormals;
+        for(int i=0;i<count;++i)
+        {float l=left[i],r=right[i];for(auto& f:filters[0])l=f.tick(l);for(auto& f:filters[1])r=f.tick(r);const float peak=std::max(std::abs(l),std::abs(r));const float coefficient=peak>envelope?attack:release;envelope=coefficient*envelope+(1-coefficient)*peak;const float db=juce::Decibels::gainToDecibels(envelope,-100.0f);const float gain=juce::Decibels::decibelsToGain(std::max(0.0f,db-threshold)*slope);left[i]=l*gain;right[i]=r*gain;}
     }
     if(reverb)reverb->process(left,right,count);
+    for(int i=0;i<count;++i)
+    {left[i]*=postGain;right[i]*=postGain;const float outputPeak=std::max(std::abs(left[i]),std::abs(right[i]));if(outputPeak>limiterCeiling){const float limit=limiterCeiling/outputPeak;left[i]*=limit;right[i]*=limit;}}
 }
 void renderTrackAudio(const Track& track,double start,double rate,float* left,float* right,int count) noexcept
 {

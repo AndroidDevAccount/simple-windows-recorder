@@ -60,6 +60,14 @@ bool runEffectTests(juce::String& report)
     if(quietRms<=0 || loudRms/quietRms>=14.0f) return fail("compressor did not reduce loud/quiet contrast");
     report+="PASS effects: compressor reduces loud passages relative to quiet ones.\n";
 
+    whole.clear();whole.setSample(0,24000,1.4f);whole.setSample(1,24000,0.7f);
+    TrackEffects tamer;tamer.prepare("peak-tamer",false,rate);tamer.process(whole.getWritePointer(0),whole.getWritePointer(1),length);
+    const float ceiling=juce::Decibels::decibelsToGain(-1.0f);
+    if(whole.getMagnitude(0,length)>ceiling+1e-5f||whole.getSample(0,24000)<0.5f||std::abs(whole.getSample(1,24000)/whole.getSample(0,24000)-0.5f)>1e-5f)return fail("peak tamer ceiling or stereo link failed");
+    whole.clear();whole.setSample(0,24000,0.2f);whole.setSample(1,24000,0.1f);tamer.prepare("peak-tamer",false,rate);tamer.process(whole.getWritePointer(0),whole.getWritePointer(1),length,10.0f);
+    if(whole.getMagnitude(0,length)>ceiling+1e-5f||std::abs(whole.getSample(1,24000)/whole.getSample(0,24000)-0.5f)>1e-5f)return fail("track Gain was applied after Peak tamer ceiling");
+    report+="PASS effects: Peak tamer catches isolated overloads after track Gain at -1 dBFS without changing stereo balance.\n";
+
     // Steady DC must be removed by the high-pass, without a noise gate.
     whole.clear();for(int ch=0;ch<2;++ch)juce::FloatVectorOperations::fill(whole.getWritePointer(ch),0.2f,length);
     TrackEffects dc;dc.prepare("lead-vocal",false,rate);dc.process(whole.getWritePointer(0),whole.getWritePointer(1),length);
@@ -91,8 +99,8 @@ bool runEffectTests(juce::String& report)
     json["tracks"][0].getDynamicObject()->removeProperty("effectsBypassed");
     project.replaceWithText(juce::JSON::toString(json));
     Session legacy;double position=0;
-    if(loadProject(legacy,project,position).failed()||legacy.tracks[0].effectPresetId!="dry")return fail("legacy project did not default to dry");
-    report+="PASS effects: preset and bypass persist; old projects load dry; DC removed.\n";
+    if(loadProject(legacy,project,position).failed()||legacy.tracks[0].effectPresetId!="dry"||!legacy.tracks[0].effectsBypassed)return fail("legacy project did not default to FX off");
+    report+="PASS effects: preset and bypass persist; old projects load with FX off; DC removed.\n";
 
     session.tracks[0].effectsBypassed=false;
     const auto mix=folder.getChildFile("mix.wav");

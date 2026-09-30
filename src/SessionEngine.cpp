@@ -192,10 +192,9 @@ struct SessionEngine::Impl
                 const int n=std::min(1024,count-processed);
                 renderTrackAudio(track,start+(double)(timelineFrames+processed)/runningRate,runningRate,
                                  scratchLeft.data(),scratchRight.data(),n);
-                effects[t].process(scratchLeft.data(),scratchRight.data(),n);
+                effects[t].process(scratchLeft.data(),scratchRight.data(),n,track.gain);
                 for(int channel=0;channel<outputCount;++channel)
-                    if(outputs[channel]) juce::FloatVectorOperations::addWithMultiply(outputs[channel]+offset+processed,
-                        channel==0?scratchLeft.data():scratchRight.data(),track.gain,n);
+                    if(outputs[channel])juce::FloatVectorOperations::add(outputs[channel]+offset+processed,channel==0?scratchLeft.data():scratchRight.data(),n);
             }
         }
         if(playback.masterGain!=1.0f)

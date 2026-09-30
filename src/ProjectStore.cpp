@@ -96,7 +96,7 @@ juce::Result loadProject(Session& session, const juce::File& file, double& playh
         track.gain = (float)juce::jlimit(0.0, 4.0, (double)t["gain"]);
         track.inputChannel = juce::jlimit(-1, 63, t.hasProperty("input")?(int)t["input"]:-1);
         track.effectPresetId = effectPreset(t["effectPreset"].toString()).id;
-        track.effectsBypassed = (bool)t["effectsBypassed"];
+        track.effectsBypassed = t.hasProperty("effectsBypassed")?(bool)t["effectsBypassed"]:true;
         track.reverb.enabled=(bool)t["reverbEnabled"];
         track.reverb.style=validReverbStyle(t["reverbStyle"].toString());
         const double mix=t.hasProperty("reverbMix")?(double)t["reverbMix"]:0.2;
@@ -176,8 +176,8 @@ juce::Result exportMix(const Session& session, const juce::File& destination, do
             const auto& track=session.tracks[t];
             if (track.mute || (anySolo && !track.solo)) continue;
             renderTrackAudio(track,pos/sampleRate,sampleRate,trackBlock.getWritePointer(0),trackBlock.getWritePointer(1),n);
-            effects[t].process(trackBlock.getWritePointer(0),trackBlock.getWritePointer(1),n);
-            for(int ch=0;ch<2;++ch) block.addFrom(ch,0,trackBlock,ch,0,n,track.gain);
+            effects[t].process(trackBlock.getWritePointer(0),trackBlock.getWritePointer(1),n,track.gain);
+            for(int ch=0;ch<2;++ch)block.addFrom(ch,0,trackBlock,ch,0,n);
         }
         for (int ch = 0; ch < 2; ++ch)
             for (int i = 0; i < n; ++i)
@@ -231,7 +231,7 @@ MixLevelAnalysis analyseMixLevel(const Session& session,double sampleRate)
     const auto total=(juce::int64)std::ceil(end*sampleRate);
     for(juce::int64 pos=0;pos<total;pos+=1024)
     {mix.clear();const int n=(int)std::min<juce::int64>(1024,total-pos);
-    for(size_t t=0;t<session.tracks.size();++t){const auto& track=session.tracks[t];if(track.mute||(anySolo&&!track.solo))continue;renderTrackAudio(track,pos/sampleRate,sampleRate,trackAudio.getWritePointer(0),trackAudio.getWritePointer(1),n);effects[t].process(trackAudio.getWritePointer(0),trackAudio.getWritePointer(1),n);for(int ch=0;ch<2;++ch)mix.addFrom(ch,0,trackAudio,ch,0,n,track.gain);}
+    for(size_t t=0;t<session.tracks.size();++t){const auto& track=session.tracks[t];if(track.mute||(anySolo&&!track.solo))continue;renderTrackAudio(track,pos/sampleRate,sampleRate,trackAudio.getWritePointer(0),trackAudio.getWritePointer(1),n);effects[t].process(trackAudio.getWritePointer(0),trackAudio.getWritePointer(1),n,track.gain);for(int ch=0;ch<2;++ch)mix.addFrom(ch,0,trackAudio,ch,0,n);}
     for(int i=0;i<n;++i){const float fade=end>dryEnd?(float)juce::jlimit(0.0,1.0,(end-(pos+i)/sampleRate)/0.1):1.0f;const float left=mix.getSample(0,i)*session.masterGain*fade,right=mix.getSample(1,i)*session.masterGain*fade;peak=std::max({peak,std::abs(left),std::abs(right)});const float kl=shelfL.processSample(hpL.processSample(left)),kr=shelfR.processSample(hpR.processSample(right));const double energy=(double)kl*kl+(double)kr*kr;if(ringCount==loudnessWindow)rolling-=ring[(size_t)ringPos];else ++ringCount;ring[(size_t)ringPos]=energy;rolling+=energy;ringPos=(ringPos+1)%loudnessWindow;if(ringCount==loudnessWindow&&++hopCount>=hop){blocks.push_back(rolling/loudnessWindow);hopCount=0;}}}
     if(blocks.empty())return result;
     const auto loudness=[](double energy){return energy>0?-0.691+10*std::log10(energy):-100.0;};

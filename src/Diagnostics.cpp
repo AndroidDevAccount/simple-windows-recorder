@@ -38,7 +38,7 @@ void startDiagnostics()
     SetUnhandledExceptionFilter(crashFilter);
     std::set_terminate([]{fatalReport("Unhandled C++ termination; restart required.\r\n");std::_Exit(1);});
 #endif
-    logEvent("START Take One 0.7.0 | "+juce::SystemStats::getOperatingSystemName()+" | previous log retained (bounded to 2 MiB on launch)");
+    logEvent("START Take One 0.8.0 | "+juce::SystemStats::getOperatingSystemName()+" | previous log retained (bounded to 2 MiB on launch)");
 }
 void showDiagnostics(const juce::String& context)
 {

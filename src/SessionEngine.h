@@ -26,7 +26,7 @@ struct Track
     bool armed = false, mute = false, solo = false;
     float gain = 1.0f;
     juce::String effectPresetId { "dry" };
-    bool effectsBypassed = false;
+    bool effectsBypassed = true;
     ReverbSettings reverb;
     // Zero-based physical device input channel, not callback-array index.
     int inputChannel = -1; // -1 follows saved global default, >=0 is explicit physical channel.

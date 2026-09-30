@@ -9,6 +9,12 @@ advice after a take, saved nondestructive Master gain, and an offline Mix check
 for integrated LUFS, sample peak and a conservative suggested Master setting.
 See [how level guidance works](docs/level-guidance.md), including its limits.
 
+Version 0.8 simplifies the recording surface: autosaved file operations live
+under File, clips launch locked, and Edit clips + Razor is required to split or
+rearrange audio. Gain has 0.1 dB nudge buttons, the meter sits beside REC/M/S,
+FX starts off with no Dry entry, and Peak tamer handles isolated transients.
+The tuner is compact. See the [0.8 workflow specification](docs/recording-workflow-0.8.md).
+
 A musician-first multitrack recorder for Windows: arm a track, count in, record,
 and have the new take land in time. The product deliberately hides traditional
 DAW complexity until it is needed.
