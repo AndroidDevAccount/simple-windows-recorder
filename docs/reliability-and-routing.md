@@ -75,3 +75,11 @@ Version 0.6.1 holds the tuner's last valid note for 1.8 seconds. Low-confidence
 or silent analysis frames no longer erase a good reading immediately; the text
 and cents marker fade during the final 0.6 seconds, then clear. Changing inputs
 or losing the audio device still clears the reading immediately.
+
+Version 0.6.2 fixes the saved waveform's obsolete 24-pixel vertical scale and
+uses most of each track lane. Every track shows red +1/-1 (0 dBFS) reference
+lines and the visible raw/pre-FX peak in dBFS. Its labelled nondestructive Gain
+control is -60 to +12 dB; waveform height follows the same clip and track gain
+used for playback. Samples beyond the references turn red. These references are
+per-track and pre-FX: presets, reverb and summing multiple tracks can still raise
+the final output, so they are not a replacement for a future master-output meter.

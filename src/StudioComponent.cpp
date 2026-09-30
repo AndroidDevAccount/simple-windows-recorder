@@ -14,6 +14,7 @@ namespace
 constexpr int headerWidth = 242, rulerHeight = 38, trackHeight = 233;
 constexpr double tunerHoldMs = 1800.0, tunerFadeStartMs = 1200.0;
 const juce::Colour bg(0xff10151e), panel(0xff19212e), ink(0xffe8edf5), muted(0xff94a3b8), accent(0xff5ee0b5), red(0xffff657a);
+float waveformSample(float raw,const Clip& clip,const Track& track) noexcept{return raw*(float)clip.gain*track.gain;}
 void updateHeldPitch(PitchResult& displayed,double& lastValid,float& opacity,const PitchResult* measured,double now,bool audioAvailable)
 {
     if(!audioAvailable){displayed={};lastValid=0;opacity=0;return;}
@@ -80,11 +81,14 @@ public:
         input.setSelectedId(t.inputChannel + 2, juce::dontSendNotification);
         input.onChange = [this] { if (owner.editable()) { owner.checkpoint(); model().inputChannel = input.getSelectedId() - 2; owner.changed(true); } };
         input.setTooltip("Recording source: "+owner.inputDescription(t.inputChannel<0?owner.defaultInput:t.inputChannel)+". Default follows the saved input at the top of the window.");
-        gain.setSliderStyle(juce::Slider::LinearHorizontal); gain.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-        gain.setRange(0.0, 2.0, 0.01); gain.setValue(t.gain, juce::dontSendNotification);
-        gain.setTooltip("Playback volume. Physical recording gain stays on the Scarlett.");
+        gainLabel.setText("Gain",juce::dontSendNotification);gainLabel.setFont(juce::FontOptions(11.0f,juce::Font::bold));gainLabel.setColour(juce::Label::textColourId,muted);
+        gain.setSliderStyle(juce::Slider::LinearHorizontal);gain.setTextBoxStyle(juce::Slider::TextBoxRight,false,54,22);
+        gain.setRange(-60.0,12.0,0.1);gain.setTextValueSuffix(" dB");gain.setDoubleClickReturnValue(true,0.0);
+        gain.setValue(juce::Decibels::gainToDecibels(t.gain,-60.0f),juce::dontSendNotification);
+        gain.setTooltip("Nondestructive playback gain. Double-click for 0 dB. The waveform grows with it; red lines mark 0 dBFS. Scarlett recording gain is unchanged.");
         gain.onDragStart = [this] { if (owner.editable()) owner.checkpoint(); };
-        gain.onValueChange = [this] { if (owner.editable()) { model().gain = (float)gain.getValue(); owner.changed(); } };
+        gain.onValueChange = [this] { if (owner.editable()) { model().gain = juce::Decibels::decibelsToGain((float)gain.getValue()); owner.changed(); } };
+        gain.onDragEnd=[this]{owner.message("Track gain "+juce::String(gain.getValue(),1)+" dB. Red waveform lines are 0 dBFS; crossing them may clip. Effects can also change the final level.");};
         int presetIndex=1;
         for(const auto& preset:effectPresets())
         {
@@ -124,14 +128,14 @@ public:
         mix.onValueChange=[this]{if(owner.editable()){if(!mix.isMouseButtonDown())owner.checkpoint();model().reverb.mix=(float)mix.getValue()/100;owner.changed();}};
         reverbInfo.onClick=[this]{juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,"Track reverb",describeReverb(model().reverb),"Got it");};
         for(auto* c:std::initializer_list<juce::Component*>{&verb,&style,&reverbInfo,&mix,&mixLabel})addAndMakeVisible(c);
-        for (auto* c : std::initializer_list<juce::Component*>{&title, &input, &gain}) addAndMakeVisible(c);
+        for (auto* c : std::initializer_list<juce::Component*>{&title,&input,&gain,&gainLabel}) addAndMakeVisible(c);
     }
     Track& model() { return owner.engine.session().tracks[(size_t)track]; }
     void resized() override
     {
         title.setBounds(15, 7, 214, 26);
         arm.setBounds(17, 39, 45, 25); mute.setBounds(68, 39, 29, 25); solo.setBounds(102, 39, 29, 25);
-        input.setBounds(17, 71, 210, 25); gain.setBounds(13, 103, 139, 22);
+        input.setBounds(17,71,210,25);gainLabel.setBounds(15,103,35,22);gain.setBounds(48,103,109,22);
         fx.setBounds(10,138,44,25); effects.setBounds(55,138,137,25); info.setBounds(198,138,29,25);
         verb.setBounds(10,170,67,25);style.setBounds(80,170,112,25);reverbInfo.setBounds(198,170,29,25);
         mixLabel.setBounds(15,202,55,22);mix.setBounds(70,202,157,22);
@@ -152,7 +156,7 @@ public:
 private:
     StudioComponent& owner;
     int track;
-    juce::Label title;
+    juce::Label title,gainLabel;
     juce::TextButton arm, mute, solo;
     juce::ComboBox input;
     juce::ComboBox effects;
@@ -188,6 +192,7 @@ public:
         {
             const auto& track = session.tracks[(size_t)index];
             const int y = owner.audioTop() + index * trackHeight;
+            const float waveformCentre=y+trackHeight*0.55f,fullScale=70.0f;
             if (index % 2 == 0) { g.setColour(juce::Colours::white.withAlpha(0.015f)); g.fillRect(headerWidth, y, getWidth() - headerWidth, trackHeight); }
             g.setColour(panel); g.drawHorizontalLine(y + trackHeight - 1, (float)headerWidth, (float)getWidth());
             g.saveState(); g.reduceClipRegion(headerWidth, y, getWidth() - headerWidth, trackHeight);
@@ -205,9 +210,10 @@ public:
                 const auto colour = trackColour(index);
                 g.setColour(colour.withAlpha(track.mute ? 0.08f : 0.17f)); g.fillRoundedRectangle(rect, 5.0f);
                 g.setColour(clip.id == owner.selectedClipId ? ink : colour.withAlpha(0.65f)); g.drawRoundedRectangle(rect, 5, clip.id == owner.selectedClipId ? 2.0f : 1.0f);
-                g.setColour(colour); g.setFont(11.0f); g.drawText("TAKE  " + formatTime(clip.startSeconds), rect.toNearestInt().reduced(8).removeFromTop(17), juce::Justification::left, true);
+                g.setColour(colour);g.setFont(11.0f);g.drawText("TAKE  "+formatTime(clip.startSeconds),rect.toNearestInt().reduced(8).removeFromTop(17),juce::Justification::left,true);
                 if (!clip.audio) continue;
-                const float centre = y + 63.0f;
+                float visibleRawPeak=0.0f;
+                const float displayGain=(float)clip.gain*track.gain;
                 const int left = std::max(headerWidth, (int)x + 2), right = std::min(getWidth(), (int)(x + w) - 2);
                 for (int px = left; px < right; ++px)
                 {
@@ -218,9 +224,16 @@ public:
                     float min = 0, max = 0;
                     const auto* data = clip.audio->getReadPointer(0);
                     for (int n = a; n < b; ++n) { min = std::min(min, data[n]); max = std::max(max, data[n]); }
-                    g.drawVerticalLine(px, centre - juce::jlimit(0.0f, 1.0f, max * (float)clip.gain) * 24,
-                                          centre - juce::jlimit(-1.0f, 0.0f, min * (float)clip.gain) * 24 + 0.6f);
+                    visibleRawPeak=std::max(visibleRawPeak,std::max(max,-min));
+                    const float shownMin=waveformSample(min,clip,track),shownMax=waveformSample(max,clip,track);
+                    g.setColour(std::max(shownMax,-shownMin)>1.0f?red:colour);
+                    g.drawVerticalLine(px,waveformCentre-juce::jlimit(0.0f,1.28f,shownMax)*fullScale,
+                                          waveformCentre-juce::jlimit(-1.28f,0.0f,shownMin)*fullScale+0.6f);
                 }
+                if(w>275&&visibleRawPeak>0)
+                {const auto rawDb=juce::Decibels::gainToDecibels(visibleRawPeak,-60.0f);const auto adjustedDb=juce::Decibels::gainToDecibels(visibleRawPeak*displayGain,-60.0f);
+                const auto peakText="Visible peak "+juce::String(rawDb,1)+" dBFS  →  "+juce::String(adjustedDb,1)+" dBFS with Gain (pre-FX)";
+                g.setColour(adjustedDb>0?red:ink.withAlpha(0.72f));g.setFont(10.0f);g.drawText(peakText,(int)x+110,y+13,std::max(0,(int)w-120),16,juce::Justification::right,true);}
             }
             if (owner.engine.isRecording() && track.armed && !owner.engine.isCountingIn())
             {
@@ -228,8 +241,7 @@ public:
                 const float w = (float)std::max(2.0, (owner.engine.position() - owner.engine.recordingStart()) * owner.pixelsPerSecond);
                 g.setColour(red.withAlpha(0.23f)); g.fillRoundedRectangle(x, (float)y + 8, w, trackHeight - 16.0f, 5);
                 g.setColour(red); g.drawText("RECORDING", (int)x + 10, y + 13, 120, 20, juce::Justification::left);
-                const float centre=y+trackHeight*0.55f;
-                g.drawHorizontalLine((int)centre,std::max((float)headerWidth,x),std::min((float)getWidth(),x+w));
+                g.drawHorizontalLine((int)waveformCentre,std::max((float)headerWidth,x),std::min((float)getWidth(),x+w));
                 if((size_t)index<owner.livePeaks.size())
                 {
                     const auto& bins=owner.livePeaks[(size_t)index];
@@ -237,11 +249,14 @@ public:
                     for(;bin!=bins.end()&&bin->seconds<owner.viewStart+owner.viewDuration();++bin)
                     {const auto& peak=*bin;
                     const float px=owner.xAt(peak.seconds);if(px<headerWidth||px>=getWidth())continue;
-                    g.setColour(std::max(peak.high,-peak.low)>=0.98f?juce::Colours::orange:ink);
-                    g.drawLine(px,centre-juce::jlimit(0.0f,1.0f,peak.high)*60,px,centre-juce::jlimit(-1.0f,0.0f,peak.low)*60+0.7f,std::max(1.0f,(float)(peak.length*owner.pixelsPerSecond)));
+                    const float low=peak.low*track.gain,high=peak.high*track.gain;
+                    g.setColour(std::max(high,-low)>=1.0f?red:ink);
+                    g.drawLine(px,waveformCentre-juce::jlimit(0.0f,1.28f,high)*fullScale,px,waveformCentre-juce::jlimit(-1.28f,0.0f,low)*fullScale+0.7f,std::max(1.0f,(float)(peak.length*owner.pixelsPerSecond)));
                     }
                 }
             }
+            g.setColour(red.withAlpha(0.78f));g.drawHorizontalLine((int)(waveformCentre-fullScale),(float)headerWidth,(float)getWidth());g.drawHorizontalLine((int)(waveformCentre+fullScale),(float)headerWidth,(float)getWidth());
+            g.setFont(juce::FontOptions(9.5f,juce::Font::bold));g.drawText("0 dBFS / CLIP",getWidth()-92,(int)(waveformCentre-fullScale)-14,84,13,juce::Justification::right);
             g.restoreState();
         }
         if(session.metronome)
@@ -389,7 +404,7 @@ StudioComponent::StudioComponent(bool preview) : previewMode(preview)
     defaultTracksButton.onClick=[this]{if(!editable())return;checkpoint();for(auto& track:engine.session().tracks)track.inputChannel=-1;changed(true);message("All tracks now follow the saved default recording input.");};
     defaultInputSelector.setTooltip("Saved default recording input. New tracks all follow this. Track menus can explicitly override it.");
     defaultInputSelector.onChange=[this]{if(!editable())return;defaultInput=defaultInputSelector.getSelectedId()-1;engine.setDefaultInput(defaultInput);if(!previewMode){workspace->setValue("defaultInput",defaultInput);workspace->saveIfNeeded();}message("Default recording input: "+inputDescription(defaultInput));changed(true);};
-    diagnosticsButton.onClick=[this]{showDiagnostics("Take One 0.6.1\nAudio status: "+audioSetup.message+"\nLatest error: "+observedError+"\nDefault input: "+inputDescription(defaultInput)+"\nProject: "+projectFile.getFullPathName());};
+    diagnosticsButton.onClick=[this]{showDiagnostics("Take One 0.6.2\nAudio status: "+audioSetup.message+"\nLatest error: "+observedError+"\nDefault input: "+inputDescription(defaultInput)+"\nProject: "+projectFile.getFullPathName());};
     retryButton.onClick=[this]{retryAudio();};
     tunerTitle.setText("NOTE MONITOR",juce::dontSendNotification);tunerTitle.setFont(juce::FontOptions(11.0f,juce::Font::bold));
     tunerDisplay.setFont(juce::FontOptions(15.0f,juce::Font::bold));
@@ -668,6 +683,7 @@ void StudioComponent::resized()
 }
 bool StudioComponent::runFeedbackUiChecks(juce::String& report)
 {
+    {Track track;track.gain=2.0f;Clip clip;clip.gain=0.5;if(std::abs(waveformSample(0.75f,clip,track)-0.75f)>1e-6f){report+="FAIL feedback UI: waveform gain disagrees with playback gain.\n";return false;}}
     {PitchResult held{440,0,69,1},silence{};double last=1000;float opacity=1;
     updateHeldPitch(held,last,opacity,&silence,1300,true);if(held.midi!=69||opacity<0.99f)return false;
     updateHeldPitch(held,last,opacity,nullptr,2500,true);if(held.midi!=69||opacity>=1||opacity<=0)return false;
