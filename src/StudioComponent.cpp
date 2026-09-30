@@ -2,6 +2,7 @@
 #include "StudioComponent.h"
 #include "CalibrationPanel.h"
 #include "ProjectStore.h"
+#include "TrackEffects.h"
 #include <algorithm>
 #include <cmath>
 
@@ -9,7 +10,7 @@ namespace studio
 {
 namespace
 {
-constexpr int headerWidth = 242, rulerHeight = 38, trackHeight = 110;
+constexpr int headerWidth = 242, rulerHeight = 38, trackHeight = 145;
 const juce::Colour bg(0xff10151e), panel(0xff19212e), ink(0xffe8edf5), muted(0xff94a3b8), accent(0xff5ee0b5), red(0xffff657a);
 juce::Colour trackColour(int i) { return std::array<juce::Colour, 4>{accent, juce::Colour(0xff78b9ff), juce::Colour(0xffffc778), juce::Colour(0xffc1a0ff)}[(size_t)i % 4]; }
 juce::String formatTime(double time)
@@ -73,6 +74,28 @@ public:
         gain.setTooltip("Playback volume. Physical recording gain stays on the Scarlett.");
         gain.onDragStart = [this] { if (owner.editable()) owner.checkpoint(); };
         gain.onValueChange = [this] { if (owner.editable()) { model().gain = (float)gain.getValue(); owner.changed(); } };
+        int presetIndex=1;
+        for(const auto& preset:effectPresets())
+        {
+            effects.addItem(preset.name,presetIndex);
+            if(t.effectPresetId==preset.id) effects.setSelectedId(presetIndex,juce::dontSendNotification);
+            ++presetIndex;
+        }
+        effects.setTooltip("Playback/export preset. Original recordings are unchanged. Press ? for the full effect chain.");
+        fx.setButtonText("FX"); fx.setToggleState(!t.effectsBypassed,juce::dontSendNotification);
+        fx.setTooltip("FX off bypasses the selected preset. Stop playback before changing effects.");
+        info.setButtonText("?"); info.setTooltip("What does this preset do?");
+        effects.onChange=[this]
+        {
+            if(!owner.editable() || effects.getSelectedId()<1) return;
+            owner.checkpoint(); model().effectPresetId=effectPresets()[(size_t)effects.getSelectedId()-1].id;
+            model().effectsBypassed=false; fx.setToggleState(true,juce::dontSendNotification);
+            owner.changed(); owner.message(juce::String(effectPreset(model().effectPresetId).name)+": "+effectPreset(model().effectPresetId).purpose+" Press ? for details.");
+        };
+        fx.onClick=[this]{if(owner.editable()){owner.checkpoint();model().effectsBypassed=!fx.getToggleState();owner.changed();}};
+        info.onClick=[this]{juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
+            juce::String(effectPreset(model().effectPresetId).name)+(model().effectsBypassed?" (bypassed)":""),describeEffectPreset(model().effectPresetId),"Got it");};
+        for(auto* c:std::initializer_list<juce::Component*>{&effects,&fx,&info}) addAndMakeVisible(c);
         for (auto* c : std::initializer_list<juce::Component*>{&title, &input, &gain}) addAndMakeVisible(c);
     }
     Track& model() { return owner.engine.session().tracks[(size_t)track]; }
@@ -81,6 +104,7 @@ public:
         title.setBounds(15, 7, 214, 26);
         arm.setBounds(17, 39, 45, 25); mute.setBounds(68, 39, 29, 25); solo.setBounds(102, 39, 29, 25);
         input.setBounds(137, 39, 90, 25); gain.setBounds(13, 73, 139, 22);
+        fx.setBounds(10,108,44,25); effects.setBounds(55,108,137,25); info.setBounds(198,108,29,25);
     }
     void paint(juce::Graphics& g) override
     {
@@ -94,13 +118,16 @@ public:
         g.setColour(bg); g.fillRect(0, getHeight() - 1, getWidth(), 1);
     }
     void mouseDown(const juce::MouseEvent&) override { owner.selectedTrack = track; owner.selectedClipId.clear(); owner.timelineRepaint(); }
-    void update() { const bool can = owner.editable(); for (auto* c : std::initializer_list<juce::Component*>{&title,&arm,&mute,&solo,&input,&gain}) c->setEnabled(can); repaint(); }
+    void update() { const bool can = owner.editable(); for (auto* c : std::initializer_list<juce::Component*>{&title,&arm,&mute,&solo,&input,&gain,&effects,&fx}) c->setEnabled(can); repaint(); }
 private:
     StudioComponent& owner;
     int track;
     juce::Label title;
     juce::TextButton arm, mute, solo;
     juce::ComboBox input;
+    juce::ComboBox effects;
+    juce::ToggleButton fx;
+    juce::TextButton info;
     juce::Slider gain;
 };
 
@@ -500,6 +527,7 @@ void StudioComponent::loadPreview()
     for(int i=0;i<4;++i)
     {
         Track t;t.id=juce::Uuid().toString();t.name=juce::StringArray{"Voice","Acoustic guitar","Bass","Harmony"}[i];t.armed=i==0;t.inputChannel=i==0?0:1;
+        t.effectPresetId=juce::StringArray{"lead-vocal","acoustic-guitar","bass","warm-vocal"}[i];
         if(i<3){Clip c;c.id=juce::Uuid().toString();c.startSeconds=i==0?7:0;c.lengthSeconds=i==0?15:37;c.sampleRate=48000;c.audio=std::make_shared<juce::AudioBuffer<float>>(1,(int)(c.lengthSeconds*48000));for(int n=0;n<c.audio->getNumSamples();++n){const double time=n/48000.0;const double env=std::pow(std::max(0.0,std::sin(time*(i==0?3:6))),i==0?0.5:3.0);c.audio->setSample(0,n,(float)(0.5*env*std::sin(time*juce::MathConstants<double>::twoPi*(110+55*i))));}t.clips.push_back(c);}
         engine.session().tracks.push_back(t);
     }

@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "StudioComponent.h"
 #include "AudioPreferences.h"
+#include "TrackEffects.h"
 
 namespace studio { bool runProjectTests(juce::String&); }
 
@@ -9,19 +10,21 @@ class RecorderApplication final : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "Simple Recorder"; }
-    const juce::String getApplicationVersion() override { return "0.2.0"; }
-    bool moreThanOneInstanceAllowed() override { return false; }
+    const juce::String getApplicationVersion() override { return "0.3.0"; }
+    bool moreThanOneInstanceAllowed() override
+    { return getCommandLineParameters().contains("--self-test") || getCommandLineParameters().contains("--preview"); }
     void initialise(const juce::String& args) override
     {
         if(args.contains("--self-test"))
         {
-            juce::String a,b,c;
+            juce::String a,b,c,d;
             const bool engine = studio::runEngineTests(a);
             const bool prefs = studio::runPreferenceTests(b);
             const bool projects = studio::runProjectTests(c);
-            const auto report = a+"\n"+b+"\n"+c+"\n";
+            const bool effects = studio::runEffectTests(d);
+            const auto report = a+"\n"+b+"\n"+c+"\n"+d+"\n";
             juce::File::getCurrentWorkingDirectory().getChildFile("test-results.txt").replaceWithText(report);
-            setApplicationReturnValue(engine && prefs && projects ? 0 : 1);
+            setApplicationReturnValue(engine && prefs && projects && effects ? 0 : 1);
             quit(); return;
         }
         const bool preview=args.contains("--preview");

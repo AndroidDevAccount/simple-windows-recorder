@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "SessionEngine.h"
+#include "TrackEffects.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -62,6 +63,8 @@ struct SessionEngine::Impl
     std::int64_t captureTarget = 0, totalCountIn = 0, maxCaptureFrames = 0;
     bool hasSolo = false;
     std::vector<Take> takes;
+    std::vector<TrackEffects> effects;
+    std::array<float,1024> scratchLeft {}, scratchRight {};
     juce::AudioBuffer<float> ring;
     std::unique_ptr<juce::AbstractFifo> fifo;
     std::thread writerThread;
@@ -75,6 +78,9 @@ struct SessionEngine::Impl
                             [] (const Track& t) { return t.solo; });
         start = std::max(0.0, seconds);
         runningRate = rate.load();
+        effects.resize(playback.tracks.size());
+        for(size_t i=0;i<effects.size();++i)
+            effects[i].prepare(playback.tracks[i].effectPresetId,playback.tracks[i].effectsBypassed,runningRate);
         framesPerBeat = runningRate * 60.0 / juce::jlimit(30.0, 300.0, model.bpm);
         timelineFrames = 0;
         stopRequested.store(false);
@@ -173,41 +179,20 @@ struct SessionEngine::Impl
 
     void render(float* const* outputs, int outputCount, int offset, int count, bool punching) noexcept
     {
-        const auto segmentStart = start + static_cast<double>(timelineFrames) / runningRate;
-        const auto segmentEnd = segmentStart + static_cast<double>(count) / runningRate;
-        for (const auto& track : playback.tracks)
+        for (size_t t=0;t<playback.tracks.size();++t)
         {
+            const auto& track=playback.tracks[t];
             if (track.mute || (hasSolo && !track.solo) || (punching && track.armed))
                 continue;
-            for (const auto& clip : track.clips)
+            for(int processed=0;processed<count;processed+=1024)
             {
-                if (!clip.audio || clip.audio->getNumSamples() == 0 || clip.sampleRate <= 0.0
-                    || clip.startSeconds >= segmentEnd || clip.startSeconds + clip.lengthSeconds <= segmentStart)
-                    continue;
-                const auto first = juce::jlimit(0, count, static_cast<int>(std::ceil((clip.startSeconds - segmentStart) * runningRate - 1.0e-6)));
-                const auto last = juce::jlimit(0, count, static_cast<int>(std::ceil((clip.startSeconds + clip.lengthSeconds - segmentStart) * runningRate - 1.0e-6)));
-                const auto scale = static_cast<float>(clip.gain) * track.gain;
-                for (int channel = 0; channel < outputCount; ++channel)
-                {
-                    if (outputs[channel] == nullptr || clip.audio->getNumChannels() == 0)
-                        continue;
-                    const auto sourceChannel = std::min(channel, clip.audio->getNumChannels() - 1);
-                    const auto* source = clip.audio->getReadPointer(sourceChannel);
-                    for (int i = first; i < last; ++i)
-                    {
-                        const auto clipTime = segmentStart + static_cast<double>(i) / runningRate - clip.startSeconds;
-                        const auto sourcePosition = (clip.sourceOffsetSeconds + clipTime) * clip.sampleRate;
-                        const auto sample = static_cast<std::int64_t>(std::floor(sourcePosition + 1.0e-7));
-                        if (sample < 0 || sample >= clip.audio->getNumSamples())
-                            continue;
-                        const auto next = std::min<std::int64_t>(sample + 1, clip.audio->getNumSamples() - 1);
-                        const auto fraction = static_cast<float>(std::max(0.0, sourcePosition - static_cast<double>(sample)));
-                        // Very short edge fades reduce clicks when punching an existing take.
-                        const auto fade = static_cast<float>(juce::jlimit(0.0, 1.0,
-                            std::min(clipTime, clip.lengthSeconds - clipTime) / 0.003));
-                        outputs[channel][offset + i] += (source[sample] + fraction * (source[next] - source[sample])) * scale * fade;
-                    }
-                }
+                const int n=std::min(1024,count-processed);
+                renderTrackAudio(track,start+(double)(timelineFrames+processed)/runningRate,runningRate,
+                                 scratchLeft.data(),scratchRight.data(),n);
+                effects[t].process(scratchLeft.data(),scratchRight.data(),n);
+                for(int channel=0;channel<outputCount;++channel)
+                    if(outputs[channel]) juce::FloatVectorOperations::addWithMultiply(outputs[channel]+offset+processed,
+                        channel==0?scratchLeft.data():scratchRight.data(),track.gain,n);
             }
         }
         if (playback.metronome)

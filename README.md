@@ -28,8 +28,21 @@ Use Scarlett direct monitoring to hear yourself. Sessions autosave in
 Documents/Simple Recorder Sessions; keep each project's Media folder with it.
 
 See [current features, tests and limitations](docs/multitrack-handoff.md).
-Loop recording, crash recovery, effects, MIDI, drums and Genesis composition
+Loop recording, crash recovery, MIDI, drums and Genesis composition
 are not implemented yet. Auto level is currently an optional clip action.
+
+## Version 0.3: simple track effects
+
+Each track now has a preset selector: Lead vocal, Warm vocal, Acoustic guitar,
+Bass, Gentle cleanup, or Dry. Choose one while stopped; press **?** beside it
+to see the exact filters, EQ and compression settings with an explanation.
+Uncheck **FX** to compare without losing your chosen preset.
+
+Effects are nondestructive and included in playback and WAV export. They do
+not change your input recording, calibration or Scarlett direct monitoring.
+Presets/bypass save with the project and support undo. Existing tracks load
+dry by default. There is no lookahead or added block-buffering latency.
+See [effects implementation and test notes](docs/track-effects.md).
 
 ## Planned scope (not all implemented)
 

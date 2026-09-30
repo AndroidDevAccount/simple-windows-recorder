@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "ProjectStore.h"
+#include "TrackEffects.h"
 #include <cmath>
 #include <map>
 
@@ -45,6 +46,8 @@ juce::Result saveProject(const Session& session, const juce::File& file, double 
         t->setProperty("armed", track.armed); t->setProperty("mute", track.mute);
         t->setProperty("solo", track.solo); t->setProperty("gain", track.gain);
         t->setProperty("input", track.inputChannel);
+        t->setProperty("effectPreset", track.effectPresetId);
+        t->setProperty("effectsBypassed", track.effectsBypassed);
         juce::Array<juce::var> clips;
         for (const auto& clip : track.clips)
         {
@@ -87,6 +90,8 @@ juce::Result loadProject(Session& session, const juce::File& file, double& playh
         track.armed = (bool)t["armed"]; track.mute = (bool)t["mute"]; track.solo = (bool)t["solo"];
         track.gain = (float)juce::jlimit(0.0, 4.0, (double)t["gain"]);
         track.inputChannel = juce::jlimit(0, 63, (int)t["input"]);
+        track.effectPresetId = effectPreset(t["effectPreset"].toString()).id;
+        track.effectsBypassed = (bool)t["effectsBypassed"];
         for (const auto& c : *t["clips"].getArray())
         {
             Clip clip;
@@ -144,36 +149,22 @@ juce::Result exportMix(const Session& session, const juce::File& destination, do
     auto writer = wav.createWriterFor(output, options);
     if (!writer) return juce::Result::fail("Could not start WAV export.");
     juce::AudioBuffer<float> block(2, 1024);
+    juce::AudioBuffer<float> trackBlock(2,1024);
+    std::vector<TrackEffects> effects(session.tracks.size());
+    for(size_t i=0;i<effects.size();++i)
+        effects[i].prepare(session.tracks[i].effectPresetId,session.tracks[i].effectsBypassed,sampleRate);
     const auto count = (juce::int64)std::ceil(end * sampleRate);
     for (juce::int64 pos = 0; pos < count; pos += block.getNumSamples())
     {
         block.clear();
         const int n = (int)std::min<juce::int64>(block.getNumSamples(), count - pos);
-        for (const auto& track : session.tracks)
+        for (size_t t=0;t<session.tracks.size();++t)
         {
+            const auto& track=session.tracks[t];
             if (track.mute || (anySolo && !track.solo)) continue;
-            for (const auto& c : track.clips)
-            {
-                if (!c.audio) continue;
-                for (int i = 0; i < n; ++i)
-                {
-                    const double time = (pos + i) / sampleRate;
-                    if (time < c.startSeconds || time >= c.startSeconds + c.lengthSeconds) continue;
-                    const double source = (time - c.startSeconds + c.sourceOffsetSeconds) * c.sampleRate;
-                    const int index = (int)source;
-                    if (index < 0 || index >= c.audio->getNumSamples()) continue;
-                    const int next = std::min(index + 1, c.audio->getNumSamples() - 1);
-                    const float f = (float)(source - index);
-                    // Short edge fades match the recorder and suppress punch boundary clicks.
-                    const float edge = (float)std::min({1.0, (time - c.startSeconds) / 0.003,
-                                                       (c.startSeconds + c.lengthSeconds - time) / 0.003});
-                    for (int ch = 0; ch < 2; ++ch)
-                    {
-                        const auto* data = c.audio->getReadPointer(std::min(ch, c.audio->getNumChannels() - 1));
-                        block.addSample(ch, i, (data[index] + f * (data[next] - data[index])) * track.gain * (float)c.gain * edge);
-                    }
-                }
-            }
+            renderTrackAudio(track,pos/sampleRate,sampleRate,trackBlock.getWritePointer(0),trackBlock.getWritePointer(1),n);
+            effects[t].process(trackBlock.getWritePointer(0),trackBlock.getWritePointer(1),n);
+            for(int ch=0;ch<2;++ch) block.addFrom(ch,0,trackBlock,ch,0,n,track.gain);
         }
         for (int ch = 0; ch < 2; ++ch)
             for (int i = 0; i < n; ++i) block.setSample(ch, i, juce::jlimit(-1.0f, 1.0f, block.getSample(ch, i)));

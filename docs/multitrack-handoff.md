@@ -3,6 +3,9 @@
 This supersedes the original calibration-only handoff. C++20, pinned JUCE 9,
 CMake; AGPL-3.0-or-later. Architecture.md remains a roadmap, not shipped scope.
 
+Update: [version 0.3 track effects](track-effects.md) adds nondestructive preset
+EQ/filter/compression; this document otherwise describes the 0.2 baseline.
+
 ## Implemented
 
 - StudioComponent: stacked tracks/horizontal timeline, arm/input selection,
