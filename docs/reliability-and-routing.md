@@ -70,3 +70,8 @@ tested by interrupting the user's active app. Next check: launch the verified
 build alone, confirm Focusrite USB ASIO, choose the mic's default channel, use
 Tracks to default if desired, and record a short take. If audio is offline,
 Retry audio then share Diagnostics > Copy report.
+
+Version 0.6.1 holds the tuner's last valid note for 1.8 seconds. Low-confidence
+or silent analysis frames no longer erase a good reading immediately; the text
+and cents marker fade during the final 0.6 seconds, then clear. Changing inputs
+or losing the audio device still clears the reading immediately.

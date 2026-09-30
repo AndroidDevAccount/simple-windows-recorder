@@ -12,7 +12,16 @@ namespace studio
 namespace
 {
 constexpr int headerWidth = 242, rulerHeight = 38, trackHeight = 233;
+constexpr double tunerHoldMs = 1800.0, tunerFadeStartMs = 1200.0;
 const juce::Colour bg(0xff10151e), panel(0xff19212e), ink(0xffe8edf5), muted(0xff94a3b8), accent(0xff5ee0b5), red(0xffff657a);
+void updateHeldPitch(PitchResult& displayed,double& lastValid,float& opacity,const PitchResult* measured,double now,bool audioAvailable)
+{
+    if(!audioAvailable){displayed={};lastValid=0;opacity=0;return;}
+    if(measured!=nullptr&&measured->midi>=0){displayed=*measured;lastValid=now;opacity=1;return;}
+    const auto age=now-lastValid;
+    if(displayed.midi<0||lastValid<=0||age>tunerHoldMs){displayed={};opacity=0;return;}
+    opacity=(float)juce::jmap(juce::jlimit(tunerFadeStartMs,tunerHoldMs,age),tunerFadeStartMs,tunerHoldMs,1.0,0.28);
+}
 juce::Colour trackColour(int i) { return std::array<juce::Colour, 4>{accent, juce::Colour(0xff78b9ff), juce::Colour(0xffffc778), juce::Colour(0xffc1a0ff)}[(size_t)i % 4]; }
 juce::String formatTime(double time)
 {
@@ -380,7 +389,7 @@ StudioComponent::StudioComponent(bool preview) : previewMode(preview)
     defaultTracksButton.onClick=[this]{if(!editable())return;checkpoint();for(auto& track:engine.session().tracks)track.inputChannel=-1;changed(true);message("All tracks now follow the saved default recording input.");};
     defaultInputSelector.setTooltip("Saved default recording input. New tracks all follow this. Track menus can explicitly override it.");
     defaultInputSelector.onChange=[this]{if(!editable())return;defaultInput=defaultInputSelector.getSelectedId()-1;engine.setDefaultInput(defaultInput);if(!previewMode){workspace->setValue("defaultInput",defaultInput);workspace->saveIfNeeded();}message("Default recording input: "+inputDescription(defaultInput));changed(true);};
-    diagnosticsButton.onClick=[this]{showDiagnostics("Take One 0.6\nAudio status: "+audioSetup.message+"\nLatest error: "+observedError+"\nDefault input: "+inputDescription(defaultInput)+"\nProject: "+projectFile.getFullPathName());};
+    diagnosticsButton.onClick=[this]{showDiagnostics("Take One 0.6.1\nAudio status: "+audioSetup.message+"\nLatest error: "+observedError+"\nDefault input: "+inputDescription(defaultInput)+"\nProject: "+projectFile.getFullPathName());};
     retryButton.onClick=[this]{retryAudio();};
     tunerTitle.setText("NOTE MONITOR",juce::dontSendNotification);tunerTitle.setFont(juce::FontOptions(11.0f,juce::Font::bold));
     tunerDisplay.setFont(juce::FontOptions(15.0f,juce::Font::bold));
@@ -392,7 +401,7 @@ StudioComponent::StudioComponent(bool preview) : previewMode(preview)
     refreshInputs();
     tunerInput.setSelectedId(juce::jlimit(1,tunerInput.getNumItems(),workspace->getIntValue("tunerInput",0)+1),juce::dontSendNotification);
     engine.setTunerInput(tunerInput.getSelectedId()-1);
-    tunerInput.onChange=[this]{engine.setTunerInput(tunerInput.getSelectedId()-1);pitch={};pitchUpdated=0;if(!previewMode){workspace->setValue("tunerInput",tunerInput.getSelectedId()-1);workspace->saveIfNeeded();}};
+    tunerInput.onChange=[this]{engine.setTunerInput(tunerInput.getSelectedId()-1);pitch={};pitchUpdated=0;pitchOpacity=0;if(!previewMode){workspace->setValue("tunerInput",tunerInput.getSelectedId()-1);workspace->saveIfNeeded();}};
     rebuildTracks(); setSize(1180,740); startTimerHz(30);
     message(previewMode ? "Preview session - no audio devices opened" : audioSetup.message);
 }
@@ -592,14 +601,14 @@ void StudioComponent::timerCallback()
     if(engine.poll()) {dirty=true;pendingRebuild=true;message("Take saved. Punch-in replaced only the recorded span. Undo restores the previous take.");}
     if(returnAfterRecording&&!engine.isBusy()) {returnAfterRecording=false;viewStart=recordViewStart;dirty=true;resized();}
     const double now=juce::Time::getMillisecondCounterHiRes();
-    if(engine.pollPitch(pitch))pitchUpdated=now;
-    if(engine.sampleRate()<=0||now-pitchUpdated>500)pitch={};
+    PitchResult measured;const bool hasMeasurement=engine.pollPitch(measured);
+    updateHeldPitch(pitch,pitchUpdated,pitchOpacity,hasMeasurement?&measured:nullptr,now,engine.sampleRate()>0);
     if(pitch.midi>=0)
     {
         const juce::String tuning=std::abs(pitch.cents)<=5?"In tune":pitch.cents<0?"Flat":"Sharp";
         const int cents=(int)std::llround(pitch.cents);
         tunerDisplay.setText(pitchName(pitch.midi)+"   "+juce::String(pitch.hz,1)+" Hz   "+tuning+"  "+(cents>0?"+":"")+juce::String(cents)+" cents",juce::dontSendNotification);
-        tunerDisplay.setColour(juce::Label::textColourId,std::abs(pitch.cents)<=5?accent:ink);
+        tunerDisplay.setColour(juce::Label::textColourId,(std::abs(pitch.cents)<=5?accent:ink).withMultipliedAlpha(pitchOpacity));
     }
     else {tunerDisplay.setText("Play or sing one note  |  A4 = 440 Hz",juce::dontSendNotification);tunerDisplay.setColour(juce::Label::textColourId,muted);}
     repaint(0,192,getWidth(),42);
@@ -634,7 +643,7 @@ void StudioComponent::paint(juce::Graphics& g)
     g.drawText("Space play/stop   R record   Enter return   Ctrl+Z undo",280,getHeight()-28,getWidth()-300,18,juce::Justification::right);
     const float middle=(float)getWidth()-115;
     g.setColour(muted);g.drawLine(middle-70,217,middle+70,217,1);g.drawLine(middle,210,middle,224,1);
-    if(pitch.midi>=0){g.setColour(std::abs(pitch.cents)<=5?accent:juce::Colour(0xffffc778));const float x=middle+(float)juce::jlimit(-50.0,50.0,pitch.cents)*1.4f;g.fillEllipse(x-4,213,8,8);}
+    if(pitch.midi>=0){g.setColour((std::abs(pitch.cents)<=5?accent:juce::Colour(0xffffc778)).withMultipliedAlpha(pitchOpacity));const float x=middle+(float)juce::jlimit(-50.0,50.0,pitch.cents)*1.4f;g.fillEllipse(x-4,213,8,8);}
 }
 void StudioComponent::resized()
 {
@@ -659,6 +668,10 @@ void StudioComponent::resized()
 }
 bool StudioComponent::runFeedbackUiChecks(juce::String& report)
 {
+    {PitchResult held{440,0,69,1},silence{};double last=1000;float opacity=1;
+    updateHeldPitch(held,last,opacity,&silence,1300,true);if(held.midi!=69||opacity<0.99f)return false;
+    updateHeldPitch(held,last,opacity,nullptr,2500,true);if(held.midi!=69||opacity>=1||opacity<=0)return false;
+    updateHeldPitch(held,last,opacity,nullptr,2900,true);if(held.midi>=0||opacity!=0)return false;}
     StudioComponent studio(true);studio.stopTimer();
     const auto folder=juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("recorder-ui-test-"+juce::Uuid().toString());
     struct Cleanup {juce::File f;~Cleanup(){if(f.getFileName().startsWith("recorder-ui-test-"))f.deleteRecursively();}} cleanup{folder};
@@ -690,7 +703,7 @@ bool StudioComponent::runFeedbackUiChecks(juce::String& report)
     if(studio.engine.isBusy()||std::abs(studio.engine.position()-30)>1e-6||std::abs(studio.viewStart-10)>1e-6)return fail("UI stop did not return cursor/view");
     studio.beginPlay();if(std::abs(studio.engine.position()-30)>1e-6)return fail("audition didn't start at punch");
     studio.engine.stop();studio.engine.audioDeviceIOCallbackWithContext(inputs,2,outputs,2,256,{});studio.engine.audioDeviceStopped();
-    report+="PASS feedback UI: playhead hand/drag over a clip leaves media unchanged; metronome offset; live waveform delivered; Stop restores anchor/view and Play auditions there.\n";
+    report+="PASS feedback UI: tuner holds a valid note for 1.8 seconds and fades; playhead hand/drag over a clip leaves media unchanged; metronome offset; live waveform delivered; Stop restores anchor/view and Play auditions there.\n";
     return true;
 }
 void StudioComponent::loadPreview()

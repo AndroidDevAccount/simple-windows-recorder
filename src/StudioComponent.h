@@ -79,6 +79,7 @@ private:
     juce::Label tunerTitle,tunerDisplay;
     std::vector<std::vector<LivePeak>> livePeaks;
     double pitchUpdated=0,recordViewStart=0;
+    float pitchOpacity=0.0f;
     bool returnAfterRecording=false;
     PitchResult pitch;
     juce::File projectFile;
