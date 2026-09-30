@@ -159,6 +159,7 @@ class Timeline final : public juce::Component
 {
 public:
     explicit Timeline(StudioComponent& s) : owner(s) { setMouseCursor(juce::MouseCursor::CrosshairCursor); }
+    void refreshTransportCursor(){if(!owner.editable()){hoverPlayhead=dragPlayhead=false;setMouseCursor(juce::MouseCursor::NormalCursor);}}
     void paint(juce::Graphics& g) override
     {
         g.fillAll(bg);
@@ -175,7 +176,7 @@ public:
         for (int index = 0; index < (int)session.tracks.size(); ++index)
         {
             const auto& track = session.tracks[(size_t)index];
-            const int y = rulerHeight + index * trackHeight;
+            const int y = owner.audioTop() + index * trackHeight;
             if (index % 2 == 0) { g.setColour(juce::Colours::white.withAlpha(0.015f)); g.fillRect(headerWidth, y, getWidth() - headerWidth, trackHeight); }
             g.setColour(panel); g.drawHorizontalLine(y + trackHeight - 1, (float)headerWidth, (float)getWidth());
             g.saveState(); g.reduceClipRegion(headerWidth, y, getWidth() - headerWidth, trackHeight);
@@ -216,24 +217,61 @@ public:
                 const float w = (float)std::max(2.0, (owner.engine.position() - owner.engine.recordingStart()) * owner.pixelsPerSecond);
                 g.setColour(red.withAlpha(0.23f)); g.fillRoundedRectangle(x, (float)y + 8, w, trackHeight - 16.0f, 5);
                 g.setColour(red); g.drawText("RECORDING", (int)x + 10, y + 13, 120, 20, juce::Justification::left);
+                const float centre=y+trackHeight*0.55f;
+                g.drawHorizontalLine((int)centre,std::max((float)headerWidth,x),std::min((float)getWidth(),x+w));
+                if((size_t)index<owner.livePeaks.size())
+                {
+                    const auto& bins=owner.livePeaks[(size_t)index];
+                    auto bin=std::lower_bound(bins.begin(),bins.end(),owner.viewStart-0.01,[](const LivePeak& p,double t){return p.seconds<t;});
+                    for(;bin!=bins.end()&&bin->seconds<owner.viewStart+owner.viewDuration();++bin)
+                    {const auto& peak=*bin;
+                    const float px=owner.xAt(peak.seconds);if(px<headerWidth||px>=getWidth())continue;
+                    g.setColour(std::max(peak.high,-peak.low)>=0.98f?juce::Colours::orange:ink);
+                    g.drawLine(px,centre-juce::jlimit(0.0f,1.0f,peak.high)*60,px,centre-juce::jlimit(-1.0f,0.0f,peak.low)*60+0.7f,std::max(1.0f,(float)(peak.length*owner.pixelsPerSecond)));
+                    }
+                }
+            }
+            g.restoreState();
+        }
+        if(session.metronome)
+        {
+            const int top=rulerHeight;g.setColour(juce::Colour(0xff252d32));g.fillRect(0,top,getWidth(),72);
+            g.setColour(juce::Colour(0xffffc778));g.setFont(juce::FontOptions(14.0f,juce::Font::bold));g.drawText("METRONOME",16,top+8,210,22,juce::Justification::left);
+            g.setFont(12.0f);g.drawText(juce::String(session.bpm,0)+" BPM  |  4/4  |  not exported",16,top+33,220,22,juce::Justification::left);
+            const double beatSeconds=60/session.bpm;
+            g.saveState();g.reduceClipRegion(headerWidth,top,getWidth()-headerWidth,72);
+            for(int64_t beat=(int64_t)std::floor(owner.viewStart/beatSeconds);beat*beatSeconds<owner.viewStart+owner.viewDuration();++beat)
+            {
+                const float x=owner.xAt(beat*beatSeconds);const bool down=beat%4==0;
+                g.setColour(down?juce::Colour(0xffffc778):muted);
+                const int width=std::max(2,(int)std::ceil(owner.pixelsPerSecond*0.016));
+                for(int px=0;px<width;++px)
+                {
+                    float peak=0;for(int s=0;s<24;++s){const double local=0.016*(px+(s+0.5)/24)/width;peak=std::max(peak,std::abs(metronomeSample((beat*beatSeconds+local)*48000,beatSeconds*48000,48000)));}
+                    g.drawVerticalLine((int)x+px,top+41-peak*155,top+41+peak*155);
+                }
+                if(down||beatSeconds*owner.pixelsPerSecond>45){g.setFont(10.0f);g.drawText(juce::String(beat/4+1)+"."+juce::String(beat%4+1),(int)x+5,top+3,44,14,juce::Justification::left);}
             }
             g.restoreState();
         }
         const float cursor = owner.xAt(owner.engine.position());
         if (cursor >= headerWidth && cursor < getWidth())
         {
-            g.setColour(owner.engine.isRecording() ? red : ink); g.drawLine(cursor, 24, cursor, (float)getHeight(), 1.4f);
-            juce::Path p; p.addTriangle(cursor-5, 18, cursor+5, 18, cursor, 26); g.fillPath(p);
+            g.setColour(owner.engine.isRecording() ? red : (hoverPlayhead||dragPlayhead?accent:ink)); g.drawLine(cursor, 24, cursor, (float)getHeight(),hoverPlayhead||dragPlayhead?3.0f:1.4f);
+            const float radius=hoverPlayhead||dragPlayhead?8.0f:5.0f;
+            juce::Path p; p.addTriangle(cursor-radius, 16, cursor+radius, 16, cursor, 27); g.fillPath(p);
         }
     }
     void mouseDown(const juce::MouseEvent& e) override
     {
         if (!owner.editable() || e.x < headerWidth) return;
+        if(std::abs(e.position.x-owner.xAt(owner.engine.position()))<=8)
+        {dragPlayhead=true;hoverPlayhead=true;setMouseCursor(juce::MouseCursor::DraggingHandCursor);repaint();return;}
         drag = false; mode = 0;
         owner.selectedClipId.clear();
-        const int index = (e.y - rulerHeight) / trackHeight;
+        const int index = (e.y - owner.audioTop()) / trackHeight;
         const auto time = owner.timeAt(e.position.x);
-        if (e.y >= rulerHeight && juce::isPositiveAndBelow(index, (int)owner.engine.session().tracks.size()))
+        if (e.y >= owner.audioTop() && juce::isPositiveAndBelow(index, (int)owner.engine.session().tracks.size()))
         {
             owner.selectedTrack = index;
             for (auto& clip : owner.engine.session().tracks[(size_t)index].clips)
@@ -251,6 +289,7 @@ public:
     }
     void mouseDrag(const juce::MouseEvent& e) override
     {
+        if(dragPlayhead && owner.editable()){owner.setPlayhead(owner.timeAt(e.position.x));repaint();return;}
         if (!owner.editable() || mode == 0 || e.getDistanceFromDragStart() < 5) return;
         auto* clip = owner.selectedClip(); if (!clip) return;
         if (!drag) { owner.checkpoint(); drag = true; }
@@ -268,8 +307,12 @@ public:
         }
         repaint();
     }
-    void mouseUp(const juce::MouseEvent&) override
+    void mouseMove(const juce::MouseEvent& e) override
+    {hoverPlayhead=owner.editable()&&e.x>=headerWidth&&std::abs(e.position.x-owner.xAt(owner.engine.position()))<=8;setMouseCursor(hoverPlayhead?juce::MouseCursor::PointingHandCursor:juce::MouseCursor::CrosshairCursor);repaint();}
+    void mouseExit(const juce::MouseEvent&) override {if(!dragPlayhead){hoverPlayhead=false;setMouseCursor(juce::MouseCursor::CrosshairCursor);repaint();}}
+    void mouseUp(const juce::MouseEvent& e) override
     {
+        if(dragPlayhead){dragPlayhead=false;mouseMove(e);return;}
         if (!drag) return;
         // A moved/trimmed clip wins its span, just like a punch. Old sources stay on disk.
         if (auto* clip = owner.selectedClip())
@@ -285,6 +328,7 @@ private:
     StudioComponent& owner;
     Clip original;
     bool drag = false;
+    bool hoverPlayhead=false,dragPlayhead=false;
     int mode = 0;
 };
 
@@ -317,7 +361,7 @@ StudioComponent::StudioComponent(bool preview) : previewMode(preview)
     tempo.onValueChange = [this] { if(editable()) { engine.session().bpm = tempo.getValue(); changed(); } };
     zoom.setRange(8,180,1); zoom.setValue(pixelsPerSecond); zoom.setSliderStyle(juce::Slider::LinearHorizontal); zoom.setTextBoxStyle(juce::Slider::NoTextBox,false,0,0);
     zoom.onValueChange = [this] { pixelsPerSecond = zoom.getValue(); resized(); };
-    clickButton.onClick = [this] { if(editable()) { engine.session().metronome = clickButton.getToggleState(); changed(); } };
+    clickButton.onClick = [this] { if(editable()) { checkpoint();engine.session().metronome = clickButton.getToggleState(); changed(true); } };
     countButton.onClick = [this] { if(editable()) { engine.session().countInBars = countButton.getToggleState() ? 1 : 0; changed(); } };
     newButton.onClick=[this]{newSession();}; openButton.onClick=[this]{openSession();}; saveButton.onClick=[this]{save(true);}; exportButton.onClick=[this]{exportFile();}; settingsButton.onClick=[this]{openAudioSetup();};
     homeButton.onClick=[this]{setPlayhead(0); viewStart=0; resized();}; returnButton.onClick=[this]{setPlayhead(lastRecordStart);};
@@ -328,9 +372,17 @@ StudioComponent::StudioComponent(bool preview) : previewMode(preview)
     // The UI timer reads the horizontal scrollbar without involving the audio callback.
     juce::PropertiesFile::Options options; options.applicationName="Workspace"; options.filenameSuffix=".settings"; options.folderName="SimpleWindowsRecorder"; options.osxLibrarySubFolder="Application Support";
     workspace=std::make_unique<juce::PropertiesFile>(options);
+    tunerTitle.setText("NOTE MONITOR",juce::dontSendNotification);tunerTitle.setFont(juce::FontOptions(11.0f,juce::Font::bold));
+    tunerDisplay.setFont(juce::FontOptions(15.0f,juce::Font::bold));
+    tunerInput.setTooltip("Listen for one guitar note or sung note on this physical input. A4 = 440 Hz. No sound is routed to speakers.");
+    for(auto* c:std::initializer_list<juce::Component*>{&tunerTitle,&tunerDisplay,&tunerInput})addAndMakeVisible(c);
     setSize(1180,740);
     if (previewMode) loadPreview();
     else { restoreWorkspace(); audioSetup=restoreAudioSetup(devices); devices.addAudioCallback(&engine); }
+    for(int channel=0;channel<std::max(2,engine.inputChannelCount());++channel)tunerInput.addItem("Input "+juce::String(channel+1),channel+1);
+    tunerInput.setSelectedId(juce::jlimit(1,tunerInput.getNumItems(),workspace->getIntValue("tunerInput",0)+1),juce::dontSendNotification);
+    engine.setTunerInput(tunerInput.getSelectedId()-1);
+    tunerInput.onChange=[this]{engine.setTunerInput(tunerInput.getSelectedId()-1);pitch={};pitchUpdated=0;if(!previewMode){workspace->setValue("tunerInput",tunerInput.getSelectedId()-1);workspace->saveIfNeeded();}};
     rebuildTracks(); setSize(1180,740); startTimerHz(30);
     message(previewMode ? "Preview session - no audio devices opened" : audioSetup.message);
 }
@@ -464,7 +516,7 @@ void StudioComponent::beginRecord()
     if(!audioSetup.calibrated)
         if(auto* d=devices.getCurrentAudioDevice()) correction=1000.0*(d->getInputLatencyInSamples()+d->getOutputLatencyInSamples())/d->getCurrentSampleRate();
     if(!engine.record(lastRecordStart,correction,projectFile.getSiblingFile("Media"))) {history.pop_back();message(engine.lastError());}
-    else message("Recording from " + formatTime(lastRecordStart) + ". Stop finishes the punch; Return goes back for another take.");
+    else {recordViewStart=viewStart;returnAfterRecording=true;livePeaks.clear();livePeaks.resize(engine.session().tracks.size());message("Recording from " + formatTime(lastRecordStart) + ". Stop returns here automatically.");}
     updateControls();
 }
 void StudioComponent::stopTransport() { engine.stop(); updateControls(); }
@@ -477,6 +529,7 @@ void StudioComponent::setPlayhead(double value)
     displayedPosition=-1; dirty=true; timeline->repaint();
 }
 double StudioComponent::viewDuration() const { return std::max(1.0,(viewport.getWidth()-headerWidth-16)/pixelsPerSecond); }
+int StudioComponent::audioTop() const {return rulerHeight+(engine.session().metronome?72:0);}
 double StudioComponent::timeAt(float x) const { return std::max(0.0,viewStart+(x-headerWidth)/pixelsPerSecond); }
 float StudioComponent::xAt(double t) const { return (float)(headerWidth+(t-viewStart)*pixelsPerSecond); }
 void StudioComponent::rebuildTracks()
@@ -495,7 +548,22 @@ void StudioComponent::updateControls()
 }
 void StudioComponent::timerCallback()
 {
+    LivePeak peak;while(engine.readLivePeak(peak))if(juce::isPositiveAndBelow(peak.track,(int)livePeaks.size()))
+    {auto& bins=livePeaks[(size_t)peak.track];if(bins.size()<180001)bins.push_back(peak);}
     if(engine.poll()) {dirty=true;pendingRebuild=true;message("Take saved. Punch-in replaced only the recorded span. Undo restores the previous take.");}
+    if(returnAfterRecording&&!engine.isBusy()) {returnAfterRecording=false;viewStart=recordViewStart;dirty=true;resized();}
+    const double now=juce::Time::getMillisecondCounterHiRes();
+    if(engine.pollPitch(pitch))pitchUpdated=now;
+    if(engine.sampleRate()<=0||now-pitchUpdated>500)pitch={};
+    if(pitch.midi>=0)
+    {
+        const juce::String tuning=std::abs(pitch.cents)<=5?"In tune":pitch.cents<0?"Flat":"Sharp";
+        const int cents=(int)std::llround(pitch.cents);
+        tunerDisplay.setText(pitchName(pitch.midi)+"   "+juce::String(pitch.hz,1)+" Hz   "+tuning+"  "+(cents>0?"+":"")+juce::String(cents)+" cents",juce::dontSendNotification);
+        tunerDisplay.setColour(juce::Label::textColourId,std::abs(pitch.cents)<=5?accent:ink);
+    }
+    else {tunerDisplay.setText("Play or sing one note  |  A4 = 440 Hz",juce::dontSendNotification);tunerDisplay.setColour(juce::Label::textColourId,muted);}
+    repaint(0,192,getWidth(),42);
     const auto error=engine.lastError(); if(error.isNotEmpty() && error!=observedError) {observedError=error;message(error);}
     if(exporting && exportTask.valid() && exportTask.wait_for(std::chrono::seconds(0))==std::future_status::ready) {auto r=exportTask.get();exporting=false;message(r.wasOk()?"Stereo WAV exported.":r.getErrorMessage());}
     if(pendingRebuild&&!engine.isBusy()) {pendingRebuild=false;rebuildTracks();}
@@ -503,10 +571,10 @@ void StudioComponent::timerCallback()
     const double p=engine.position();
     if(!clock.isBeingEdited() && p!=displayedPosition) {clock.setText(formatTime(p),juce::dontSendNotification);displayedPosition=p;}
     if(engine.isCountingIn()) message("Count in: " + juce::String(engine.countInBeatsRemaining()) + " beats. Recording will begin at " + formatTime(lastRecordStart));
-    else if(engine.isRecording()) message("Recording. Stop finishes the punch; Return goes back for another take.");
+    else if(engine.isRecording()) message("Recording. Stop saves the take and returns to its start.");
     if(engine.isBusy() && p>viewStart+viewDuration()*0.95) {viewStart=std::max(0.0,p-viewDuration()*0.2);resized();}
     else if(std::abs(scroll.getCurrentRangeStart()-viewStart)>0.001) {viewStart=scroll.getCurrentRangeStart();}
-    updateControls(); timeline->repaint();
+    updateControls(); timeline->refreshTransportCursor();timeline->repaint();
     if(closing && !engine.isBusy() && !exporting) {if(save())juce::JUCEApplication::getInstance()->quit();else closing=false;}
 }
 bool StudioComponent::keyPressed(const juce::KeyPress& k)
@@ -525,6 +593,9 @@ void StudioComponent::paint(juce::Graphics& g)
     g.fillAll(bg);g.setColour(panel);g.fillRect(0,68,getWidth(),76);g.setColour(accent);g.fillRoundedRectangle(20,22,5,28,2);
     g.setColour(muted);g.setFont(11.0f);g.drawText("PUNCH-IN RECORDER",32,getHeight()-28,160,18,juce::Justification::left);
     g.drawText("Space play/stop   R record   Enter return   Ctrl+Z undo",198,getHeight()-28,getWidth()-218,18,juce::Justification::right);
+    const float middle=(float)getWidth()-115;
+    g.setColour(muted);g.drawLine(middle-70,217,middle+70,217,1);g.drawLine(middle,210,middle,224,1);
+    if(pitch.midi>=0){g.setColour(std::abs(pitch.cents)<=5?accent:juce::Colour(0xffffc778));const float x=middle+(float)juce::jlimit(-50.0,50.0,pitch.cents)*1.4f;g.fillEllipse(x-4,213,8,8);}
 }
 void StudioComponent::resized()
 {
@@ -539,15 +610,52 @@ void StudioComponent::resized()
     latencyLabel.setBounds(694,79,std::max(80,w-710),52);latencyLabel.setFont(12.0f);latencyLabel.setColour(juce::Label::textColourId,muted);
     x=18;for(auto* b:{&addButton,&importButton,&undoButton,&redoButton,&splitButton,&deleteButton,&levelButton}){const int width=b==&importButton?104:(b==&levelButton?84:66);b->setBounds(x,157,width,27);x+=width+6;}
     zoomLabel.setBounds(w-190,157,40,27);zoom.setBounds(w-150,157,130,27);
-    viewport.setBounds(16,198,w-32,std::max(100,h-291));
-    timeline->setSize(viewport.getWidth()-16,std::max(viewport.getHeight(),rulerHeight+(int)trackHeaders.size()*trackHeight+20));
-    for(int i=0;i<(int)trackHeaders.size();++i)trackHeaders[(size_t)i]->setBounds(0,rulerHeight+i*trackHeight,headerWidth,trackHeight);
+    tunerTitle.setBounds(18,198,105,30);tunerInput.setBounds(126,200,95,26);tunerDisplay.setBounds(230,197,std::max(300,w-455),32);
+    viewport.setBounds(16,238,w-32,std::max(100,h-331));
+    timeline->setSize(viewport.getWidth()-16,std::max(viewport.getHeight(),audioTop()+(int)trackHeaders.size()*trackHeight+20));
+    for(int i=0;i<(int)trackHeaders.size();++i)trackHeaders[(size_t)i]->setBounds(0,audioTop()+i*trackHeight,headerWidth,trackHeight);
     scroll.setBounds(16+headerWidth,h-86,w-32-headerWidth,12); scroll.setRangeLimits(0,std::max({120.0,engine.duration()+30,viewStart+viewDuration()}));scroll.setCurrentRange(viewStart,viewDuration(),juce::dontSendNotification);
     status.setBounds(20,h-65,w-40,30);status.setFont(12.0f);status.setColour(juce::Label::textColourId,muted);
 }
+bool StudioComponent::runFeedbackUiChecks(juce::String& report)
+{
+    StudioComponent studio(true);studio.stopTimer();
+    const auto folder=juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("recorder-ui-test-"+juce::Uuid().toString());
+    struct Cleanup {juce::File f;~Cleanup(){if(f.getFileName().startsWith("recorder-ui-test-"))f.deleteRecursively();}} cleanup{folder};
+    const auto fail=[&](const juce::String& s){report+="FAIL feedback UI: "+s+"\n";return false;};
+    const auto event=[&](juce::Point<float> point,juce::Point<float> down,bool dragged)
+    {return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(),point,juce::ModifierKeys::leftButtonModifier,1,0,0,0,0,studio.timeline.get(),studio.timeline.get(),juce::Time::getCurrentTime(),down,juce::Time::getCurrentTime(),1,dragged);};
+    const juce::Point<float> start{studio.xAt(30),(float)(studio.audioTop()+trackHeight+60)};
+    studio.timeline->mouseMove(event(start,start,false));
+    if(studio.timeline->getMouseCursor()!=juce::MouseCursor(juce::MouseCursor::PointingHandCursor))return fail("missing hand cursor");
+    studio.timeline->mouseDown(event(start,start,false));
+    const auto end=start.translated(64,0);studio.timeline->mouseDrag(event(end,start,true));studio.timeline->mouseUp(event(end,start,true));
+    if(std::abs(studio.engine.position()-32)>1e-6||studio.engine.session().tracks[1].clips[0].startSeconds!=0||!studio.history.empty())return fail("playhead drag edited a clip or failed to seek");
+    const int withClick=studio.trackHeaders[0]->getY();studio.engine.session().metronome=false;studio.resized();
+    if(withClick-studio.trackHeaders[0]->getY()!=72)return fail("metronome lane layout offset");
+    studio.engine.session().metronome=true;studio.resized();studio.setPlayhead(30);
+    studio.engine.prepareForDevice(48000,256,2);studio.engine.session().countInBars=0;studio.projectFile=folder.getChildFile("song.srproject");
+    studio.beginRecord();if(!studio.engine.isRecording())return fail("could not start simulated UI take");
+    std::array<float,256> input{},left{},right{};const float* inputs[]{input.data(),nullptr};float* outputs[]{left.data(),right.data()};
+    for(int block=0;block<375;++block)
+    {
+        for(int i=0;i<256;++i){const double time=(block*256+i)/48000.0;input[(size_t)i]=(float)(0.6*std::sin(time*juce::MathConstants<double>::twoPi*110)*(0.5+0.5*std::sin(time*12)));}
+        studio.engine.audioDeviceIOCallbackWithContext(inputs,2,outputs,2,256,{});
+        if(block%8==0){studio.timerCallback();juce::Thread::sleep(1);}
+    }
+    studio.timerCallback();if(studio.livePeaks.empty()||studio.livePeaks[0].empty())return fail("UI didn't receive live waveform");
+    {auto image=studio.createComponentSnapshot(studio.getLocalBounds());juce::FileOutputStream stream(juce::File::getCurrentWorkingDirectory().getChildFile("feedback-live-preview.png"));stream.setPosition(0);stream.truncate();juce::PNGImageFormat png;png.writeImageToStream(image,stream);}
+    studio.stopTransport();
+    for(int n=0;n<3000&&studio.engine.isBusy();++n){studio.engine.audioDeviceIOCallbackWithContext(inputs,2,outputs,2,256,{});studio.timerCallback();juce::Thread::sleep(1);}
+    if(studio.engine.isBusy()||std::abs(studio.engine.position()-30)>1e-6||std::abs(studio.viewStart-10)>1e-6)return fail("UI stop did not return cursor/view");
+    studio.beginPlay();if(std::abs(studio.engine.position()-30)>1e-6)return fail("audition didn't start at punch");
+    studio.engine.stop();studio.engine.audioDeviceIOCallbackWithContext(inputs,2,outputs,2,256,{});studio.engine.audioDeviceStopped();
+    report+="PASS feedback UI: playhead hand/drag over a clip leaves media unchanged; metronome offset; live waveform delivered; Stop restores anchor/view and Play auditions there.\n";
+    return true;
+}
 void StudioComponent::loadPreview()
 {
-    engine.session()=Session{};engine.session().name="Evening ideas";
+    engine.session()=Session{};engine.session().name="Evening ideas";engine.session().metronome=true;
     for(int i=0;i<4;++i)
     {
         Track t;t.id=juce::Uuid().toString();t.name=juce::StringArray{"Voice","Acoustic guitar","Bass","Harmony"}[i];t.armed=i==0;t.inputChannel=i==0?0:1;

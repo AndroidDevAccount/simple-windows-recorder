@@ -18,6 +18,7 @@ public:
     void resized() override;
     bool keyPressed(const juce::KeyPress&) override;
     void requestClose();
+    static bool runFeedbackUiChecks(juce::String&);
 
 private:
     friend class TrackHeader;
@@ -46,6 +47,7 @@ private:
     void updateControls();
     void timerCallback() override;
     double viewDuration() const;
+    int audioTop() const;
     double timeAt(float x) const;
     float xAt(double time) const;
     void message(const juce::String&);
@@ -66,6 +68,12 @@ private:
     juce::ToggleButton clickButton{"Click"}, countButton{"Count in"};
     juce::Label name, clock, tempoLabel, latencyLabel, status, guide, zoomLabel;
     juce::Slider tempo, zoom;
+    juce::ComboBox tunerInput;
+    juce::Label tunerTitle,tunerDisplay;
+    std::vector<std::vector<LivePeak>> livePeaks;
+    double pitchUpdated=0,recordViewStart=0;
+    bool returnAfterRecording=false;
+    PitchResult pitch;
     juce::File projectFile;
     std::unique_ptr<juce::PropertiesFile> workspace;
     std::unique_ptr<juce::FileChooser> chooser;

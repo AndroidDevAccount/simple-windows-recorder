@@ -53,6 +53,24 @@ the EQ/compressor but has its own on/off switch. Everything is nondestructive,
 saved with the project and included in export, including the decaying tail.
 Stop first before changing effects. See [reverb notes](docs/reverb.md).
 
+## Version 0.5: see and hear what you are doing
+
+- **Click** now shows a built-in metronome lane at the top, with beat transients
+  and accented downbeats. It follows tempo/zoom and stays out of the export.
+- **Recording draws the incoming waveform live**, separately for each armed
+  input, on the compensated timeline. Silence is a flat line.
+- Hover over the stopped **playhead** for a highlighted grab handle, then drag
+  it without moving clips underneath.
+- **Stop after recording returns to the punch start automatically**, after the
+  final latency-compensated samples have been saved. Play auditions that take;
+  Record punches there again. Normal playback Stop still stays where stopped.
+- The always-visible **Note Monitor** listens to your chosen input for a single
+  guitar/voice note, showing note/octave, Hz, flat/sharp cents and an in-tune
+  indicator. A4=440 Hz. It does not send mic audio to speakers or detect chords.
+
+The [spec and handoff checklist](docs/recording-feedback-spec.md) records all
+five requests, implementation choices, tests and remaining hardware checks.
+
 ## Planned scope (not all implemented)
 
 - Windows 10/11

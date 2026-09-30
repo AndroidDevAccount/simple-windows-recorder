@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(SimpleWindowsRecorder VERSION 0.4.0 LANGUAGES C CXX)
+project(SimpleWindowsRecorder VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,7 +15,7 @@ juce_add_gui_app(SimpleRecorder
 target_sources(SimpleRecorder PRIVATE
     src/App.cpp src/StudioComponent.cpp src/SessionEngine.cpp
     src/ProjectStore.cpp src/AudioPreferences.cpp src/CalibrationPanel.cpp
-    src/TrackEffects.cpp src/TrackReverb.cpp tests/EffectTests.cpp tests/ReverbTests.cpp
+    src/TrackEffects.cpp src/TrackReverb.cpp src/InputAnalysis.cpp tests/FeedbackTests.cpp tests/EffectTests.cpp tests/ReverbTests.cpp
     tests/EngineTests.cpp tests/ProjectTests.cpp)
 
 target_compile_definitions(SimpleRecorder PRIVATE

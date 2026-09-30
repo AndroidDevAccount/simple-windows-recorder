@@ -18,18 +18,6 @@ constexpr int maxArmedTracks = 32;
 constexpr std::int64_t captureMemoryBudget = 256LL * 1024 * 1024;
 enum class Transport { idle, playing, countIn, recording, draining, finalizing };
 
-float clickSample(double frame, double framesPerBeat, double rate) noexcept
-{
-    const auto beat = static_cast<std::int64_t>(std::floor(frame / framesPerBeat));
-    const auto offset = frame - static_cast<double>(beat) * framesPerBeat;
-    const auto length = rate * 0.016;
-    if (offset < 0.0 || offset >= length)
-        return 0.0f;
-    const auto envelope = 1.0 - offset / length;
-    const auto frequency = beat % 4 == 0 ? 1400.0 : 1000.0;
-    return static_cast<float>(0.13 * envelope * envelope
-        * std::sin(juce::MathConstants<double>::twoPi * frequency * offset / rate));
-}
 }
 
 struct SessionEngine::Impl
@@ -41,6 +29,7 @@ struct SessionEngine::Impl
         juce::File file;
         std::unique_ptr<juce::AudioFormatWriter> writer;
         std::shared_ptr<juce::AudioBuffer<float>> audio;
+        float low=0,high=0;int peakSamples=0;int64_t peakStart=0;
     };
 
     Session model, playback, beforeRecord, undoSession;
@@ -68,6 +57,8 @@ struct SessionEngine::Impl
     juce::AudioBuffer<float> ring;
     std::unique_ptr<juce::AbstractFifo> fifo;
     std::thread writerThread;
+    AnalysisQueue<LivePeak,8193> live;
+    InputAnalysis analysis;
 
     Impl() { physicalToCallback.fill(-1); }
 
@@ -156,8 +147,17 @@ struct SessionEngine::Impl
         fifo->prepareToWrite(count, first, firstCount, second, secondCount);
         for (std::size_t t = 0; t < takes.size(); ++t)
         {
+            auto& take=takes[t];
             const auto input = takes[t].callbackInput;
             const auto* source = input >= 0 && input < inputCount ? inputs[input] : nullptr;
+            for(int i=0;i<count;++i)
+            {
+                const auto frame=capturedFrames+i-delayFrames;if(frame<0)continue;
+                if(take.peakSamples==0)take.peakStart=frame;
+                const float value=source?source[offset+i]:0;take.low=std::min(take.low,value);take.high=std::max(take.high,value);
+                if(++take.peakSamples>=std::max(1,(int)(runningRate*0.01)))
+                {live.push({(int)take.trackIndex,recordAnchor.load()+take.peakStart/runningRate,take.peakSamples/runningRate,take.low,take.high});take.low=take.high=0;take.peakSamples=0;}
+            }
             auto* destination = ring.getWritePointer(static_cast<int>(t));
             if (source != nullptr)
             {
@@ -198,7 +198,7 @@ struct SessionEngine::Impl
         if (playback.metronome)
             for (int i = 0; i < count; ++i)
             {
-                const auto click = clickSample(start * runningRate + static_cast<double>(timelineFrames + i), framesPerBeat, runningRate);
+                const auto click = metronomeSample(start * runningRate + static_cast<double>(timelineFrames + i), framesPerBeat, runningRate);
                 for (int channel = 0; channel < outputCount; ++channel)
                     if (outputs[channel] != nullptr)
                         outputs[channel][offset + i] += click;
@@ -357,6 +357,7 @@ bool SessionEngine::record(double startSeconds, double compensationMs, const juc
     {
         impl->preparePlayback(startSeconds);
         impl->beforeRecord = impl->model;
+        LivePeak stale;while(impl->live.pop(stale)){}
         impl->recordAnchor.store(impl->start);
         impl->recordEnd.store(impl->start);
         impl->capturedFrames = 0;
@@ -497,6 +498,10 @@ void SessionEngine::insertPunch(Track& track, const Clip& replacement)
     track.clips = std::move(result);
 }
 
+bool SessionEngine::readLivePeak(LivePeak& p) {return impl->live.pop(p);}
+void SessionEngine::setTunerInput(int channel) {impl->analysis.setInput(channel);}
+bool SessionEngine::pollPitch(PitchResult& result) {return impl->analysis.poll(result);}
+
 bool SessionEngine::poll()
 {
     if (impl->transport.load(std::memory_order_acquire) != Transport::finalizing
@@ -545,6 +550,7 @@ bool SessionEngine::poll()
     impl->takes.clear();
     impl->fifo.reset();
     impl->ring.setSize(0, 0);
+    impl->displayedPosition.store(impl->recordAnchor.load());
     impl->transport.store(Transport::idle, std::memory_order_release);
     return changed;
 }
@@ -553,6 +559,7 @@ void SessionEngine::prepareForDevice(double sampleRate, int, int numInputs)
 {
     impl->interrupted();
     impl->rate.store(sampleRate);
+    impl->analysis.prepare(sampleRate);
     impl->physicalInputs.store(std::min(maxInputs, numInputs));
     impl->physicalToCallback.fill(-1);
     for (int i = 0; i < std::min(maxInputs, numInputs); ++i)
@@ -593,6 +600,7 @@ void SessionEngine::audioDeviceIOCallbackWithContext(const float* const* inputs,
     for (int physical = 0; physical < impl->physicalInputs.load(); ++physical)
     {
         const auto input = impl->physicalToCallback[static_cast<std::size_t>(physical)];
+        impl->analysis.capture(input>=0&&input<inputCount?inputs[input]:nullptr,sampleCount,physical);
         const auto range = input >= 0 && input < inputCount && inputs[input] != nullptr
             ? juce::FloatVectorOperations::findMinAndMax(inputs[input], sampleCount) : juce::Range<float>();
         auto& meter = impl->peaks[static_cast<std::size_t>(physical)];
@@ -615,7 +623,7 @@ void SessionEngine::audioDeviceIOCallbackWithContext(const float* const* inputs,
             const auto elapsed = impl->totalCountIn - remaining;
             for (int i = 0; i < count; ++i)
             {
-                const auto click = clickSample(static_cast<double>(elapsed + i), impl->framesPerBeat, impl->runningRate);
+                const auto click = metronomeSample(static_cast<double>(elapsed + i), impl->framesPerBeat, impl->runningRate);
                 for (int channel = 0; channel < outputCount; ++channel)
                     if (outputs[channel] != nullptr)
                         outputs[channel][offset + i] = click;

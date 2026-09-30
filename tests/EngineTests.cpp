@@ -144,8 +144,17 @@ bool runEngineTests(juce::String& report)
             };
             require(engine.record(30.0, latency * 1000.0 / FakeDevice::rate, directory), "Could not begin multitrack recording");
             device.advance(duration);
+            LivePeak live;bool voicePeak=false,guitarPeak=false;
+            while(engine.readLivePeak(live))
+            {
+                require(live.seconds>=30.0,"Live waveform included compensation padding");
+                if(live.track==0 && live.high>=0.3f)voicePeak=true;
+                if(live.track==1 && live.low<=-0.2f)guitarPeak=true;
+            }
+            require(voicePeak&&guitarPeak,"Live waveform missing signed per-input data before Stop");
             engine.stop();
             require(device.finish(), "Completed punch did not update session");
+            require(close(engine.position(),30.0),"Stopped take failed to return to recording anchor");
             require(engine.lastError().isEmpty(), "Unexpected recording error");
             require(engine.session().tracks[0].clips.size() == 3 && engine.session().tracks[1].clips.size() == 3, "Both armed tracks must be punched");
             for (int track = 0; track < 2; ++track)
@@ -200,6 +209,7 @@ bool runEngineTests(juce::String& report)
             require(engine.isCountingIn() && close(engine.position(), 30.0), "Count-in moved the punch anchor");
             engine.stop();
             require(!device.finish(), "Canceling count-in must not add a take");
+            require(close(engine.position(),30.0),"Cancelled count-in failed to restore anchor");
             require(engine.session().tracks[0].clips.size() == 1, "Canceling count-in changed existing audio");
             ++passed;
             report += "PASS: count-in holds the playhead; cancel leaves earlier audio unchanged.\n";
@@ -243,6 +253,7 @@ bool runEngineTests(juce::String& report)
                 juce::Thread::sleep(1);
             }
             require(!engine.isBusy() && changed, "Device loss failed to preserve completed capture");
+            require(close(engine.position(),30.0),"Device loss failed to restore recording anchor");
             require(engine.lastError().isNotEmpty(), "Device loss was not reported");
             require(findPunch(engine.session().tracks[0], 30.0).lengthSeconds < 0.1, "Unavailable device-loss tail was incorrectly claimed as recorded");
             ++passed;

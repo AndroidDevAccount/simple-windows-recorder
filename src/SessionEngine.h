@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include "TrackReverb.h"
+#include "InputAnalysis.h"
 
 namespace studio
 {
@@ -71,6 +72,9 @@ public:
     float inputPeak(int physicalChannel) const noexcept;
     float outputPeak() const noexcept;
     int inputChannelCount() const noexcept;
+    bool readLivePeak(LivePeak&);
+    void setTunerInput(int channel);
+    bool pollPitch(PitchResult&);
     // Call on the UI timer. True means a recording was committed to session().
     // Even on failure, this releases the transport when finalization completes.
     bool poll();
