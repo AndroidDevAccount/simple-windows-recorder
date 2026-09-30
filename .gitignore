@@ -4,3 +4,6 @@
 *.suo
 *.wav
 *.log
+/feedback-live-preview.png
+/studio-preview.png
+/test-results.txt

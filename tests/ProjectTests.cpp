@@ -71,7 +71,7 @@ bool runProjectTests(juce::String& report)
     source.name = "Punch round trip"; source.bpm = 113; source.metronome = true; source.countInBars = 0;source.masterGain=0.5f;
     Track guitar;
     guitar.id = "guitar"; guitar.name = "Guitar input 2"; guitar.inputChannel = 1;
-    guitar.armed = true; guitar.solo = true; guitar.gain = 0.5f;
+    guitar.armed=true;guitar.solo=true;guitar.gain=0.5f;guitar.peakTamerEnabled=true;
     guitar.clips.push_back(original);
     SessionEngine::insertPunch(guitar, replacement);
     source.tracks.push_back(guitar);
@@ -98,7 +98,7 @@ bool runProjectTests(juce::String& report)
         return fail("session name, tempo, metronome, disabled count-in, playhead or tracks changed after reload");
     const auto& restoredGuitar = restored.tracks[0];
     if (restoredGuitar.id != guitar.id || restoredGuitar.name != guitar.name || !restoredGuitar.armed
-        || !restoredGuitar.solo || restoredGuitar.mute || restoredGuitar.inputChannel != 1
+        || !restoredGuitar.solo||restoredGuitar.mute||restoredGuitar.inputChannel!=1||!restoredGuitar.peakTamerEnabled
         || !near(restoredGuitar.gain, 0.5) || restoredGuitar.clips.size() != 3)
         return fail("track identity, arm, input, mute/solo, gain or punch fragments changed after reload");
     const auto& left = restoredGuitar.clips[0];

@@ -38,6 +38,7 @@ private:
     void autoLevel();
     void checkMix();
     void showFileMenu();
+    void setEditTool(int);
     void undo(bool redo);
     void importFile();
     void exportFile();
@@ -72,9 +73,8 @@ private:
     juce::TextButton newButton{"New"}, openButton{"Open"}, saveButton{"Save"}, exportButton{"Export WAV"}, settingsButton{"Audio setup"};
     juce::TextButton fileButton{"File v"};
     juce::TextButton homeButton{"|<"}, playButton{"Play"}, stopButton{"Stop"}, recordButton{"Record"}, returnButton{"Return"};
-    juce::TextButton addButton{"+ Track"}, importButton{"Import audio"}, splitButton{"Split"}, deleteButton{"Delete"}, undoButton{"Undo"}, redoButton{"Redo"}, levelButton{"Auto level"},mixCheckButton{"Mix check"};
+    juce::TextButton addButton{"+"},importButton{"Import audio"},splitButton{"Split"},deleteButton{"Delete"},undoButton{"Undo"},redoButton{"Redo"},levelButton{"Auto level"},mixCheckButton{"Mix check"},handButton{"Hand"},splitToolButton{"Split"};
     juce::ToggleButton clickButton{"Click"}, countButton{"Count in"};
-    juce::ToggleButton editClipsButton{"Edit clips"},razorButton{"Razor"};
     juce::Label name, clock, tempoLabel, latencyLabel, status, guide, zoomLabel,masterLabel;
     juce::Slider tempo, zoom,masterGain;
     juce::ComboBox tunerInput;
@@ -98,7 +98,7 @@ private:
     int selectedTrack = 0;
     double pixelsPerSecond = 32.0, viewStart = 0.0, lastRecordStart = 0.0;
     double displayedPosition = -1;
-    bool pendingRebuild = false, dirty = false, previewMode = false, exporting = false, checkingMix=false,closing = false, chooserPending = false,clipEditing=false,razorMode=false;
+    bool pendingRebuild=false,dirty=false,previewMode=false,exporting=false,checkingMix=false,closing=false,chooserPending=false;int editTool=0;
     juce::String observedError;
 };
 }

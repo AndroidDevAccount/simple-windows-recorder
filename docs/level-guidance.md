@@ -16,7 +16,10 @@ scale. This deliberately makes ordinary musical detail readable: -12 dBFS is
 shown at half height rather than one-quarter height. Exactly 0 dBFS still lands
 on the red reference, and over-range samples extend beyond it and turn red.
 The displayed shape is therefore perceptual, not a linear oscilloscope ruler.
-The numeric raw and after-Gain dBFS readouts remain the authoritative values.
+The saved waveform is rendered through the selected preset, reverb, track Gain
+and Peak tamer, while the source PCM remains untouched. The numeric raw-input
+and audible-output dBFS readouts remain the authoritative values. Effect and
+gain changes invalidate the cached preview and redraw its shape.
 
 ## Input-health guidance
 

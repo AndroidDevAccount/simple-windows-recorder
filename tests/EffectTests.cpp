@@ -66,6 +66,8 @@ bool runEffectTests(juce::String& report)
     if(whole.getMagnitude(0,length)>ceiling+1e-5f||whole.getSample(0,24000)<0.5f||std::abs(whole.getSample(1,24000)/whole.getSample(0,24000)-0.5f)>1e-5f)return fail("peak tamer ceiling or stereo link failed");
     whole.clear();whole.setSample(0,24000,0.2f);whole.setSample(1,24000,0.1f);tamer.prepare("peak-tamer",false,rate);tamer.process(whole.getWritePointer(0),whole.getWritePointer(1),length,10.0f);
     if(whole.getMagnitude(0,length)>ceiling+1e-5f||std::abs(whole.getSample(1,24000)/whole.getSample(0,24000)-0.5f)>1e-5f)return fail("track Gain was applied after Peak tamer ceiling");
+    whole.clear();whole.setSample(0,24000,0.5f);whole.setSample(1,24000,0.25f);tamer.prepare("acoustic-guitar",false,rate,{},true);tamer.process(whole.getWritePointer(0),whole.getWritePointer(1),length,4.0f);
+    if(whole.getMagnitude(0,length)>ceiling+1e-5f)return fail("independent Peak tamer did not follow the Acoustic guitar preset");
     report+="PASS effects: Peak tamer catches isolated overloads after track Gain at -1 dBFS without changing stereo balance.\n";
 
     // Steady DC must be removed by the high-pass, without a noise gate.
@@ -100,7 +102,9 @@ bool runEffectTests(juce::String& report)
     project.replaceWithText(juce::JSON::toString(json));
     Session legacy;double position=0;
     if(loadProject(legacy,project,position).failed()||legacy.tracks[0].effectPresetId!="dry"||!legacy.tracks[0].effectsBypassed)return fail("legacy project did not default to FX off");
-    report+="PASS effects: preset and bypass persist; old projects load with FX off; DC removed.\n";
+    json=juce::JSON::parse(project);auto* legacyTrack=json["tracks"][0].getDynamicObject();legacyTrack->setProperty("effectPreset","peak-tamer");legacyTrack->setProperty("effectsBypassed",false);legacyTrack->removeProperty("peakTamer");project.replaceWithText(juce::JSON::toString(json));
+    Session migrated;if(loadProject(migrated,project,position).failed()||migrated.tracks[0].effectPresetId!="dry"||!migrated.tracks[0].effectsBypassed||!migrated.tracks[0].peakTamerEnabled)return fail("old active Peak tamer preset was not migrated to the independent switch");
+    report+="PASS effects: preset and bypass persist; old projects load safely and migrate active Peak tamer; DC removed.\n";
 
     session.tracks[0].effectsBypassed=false;
     const auto mix=folder.getChildFile("mix.wav");

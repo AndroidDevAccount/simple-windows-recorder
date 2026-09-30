@@ -83,3 +83,9 @@ control is -60 to +12 dB; waveform height follows the same clip and track gain
 used for playback. Samples beyond the references turn red. These references are
 per-track and pre-FX: presets, reverb and summing multiple tracks can still raise
 the final output, so they are not a replacement for a future master-output meter.
+
+Version 0.8.1 replaces that pre-FX approximation with a cached nondestructive
+preview of the actual preset, reverb, Gain and independent Peak tamer chain.
+The raw-input and audible-output peaks are labelled separately, Gain extends to
++24 dB, and the source recording remains unchanged. File is upper-left; Hand,
+Split and Delete are persistent tools; Ctrl+Z/Ctrl+Y provide multi-level history.

@@ -74,7 +74,7 @@ struct SessionEngine::Impl
         runningRate = rate.load();
         effects.resize(playback.tracks.size());
         for(size_t i=0;i<effects.size();++i)
-            effects[i].prepare(playback.tracks[i].effectPresetId,playback.tracks[i].effectsBypassed,runningRate,playback.tracks[i].reverb);
+            effects[i].prepare(playback.tracks[i].effectPresetId,playback.tracks[i].effectsBypassed,runningRate,playback.tracks[i].reverb,playback.tracks[i].peakTamerEnabled);
         framesPerBeat = runningRate * 60.0 / juce::jlimit(30.0, 300.0, model.bpm);
         timelineFrames = 0;
         stopRequested.store(false);

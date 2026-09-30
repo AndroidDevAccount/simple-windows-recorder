@@ -49,6 +49,7 @@ juce::Result saveProject(const Session& session, const juce::File& file, double 
         t->setProperty("input", track.inputChannel);
         t->setProperty("effectPreset", track.effectPresetId);
         t->setProperty("effectsBypassed", track.effectsBypassed);
+        t->setProperty("peakTamer",track.peakTamerEnabled);
         t->setProperty("reverbEnabled",track.reverb.enabled);
         t->setProperty("reverbStyle",track.reverb.style);
         t->setProperty("reverbMix",track.reverb.mix);
@@ -93,10 +94,12 @@ juce::Result loadProject(Session& session, const juce::File& file, double& playh
         Track track;
         track.id = t["id"].toString(); track.name = t["name"].toString();
         track.armed = (bool)t["armed"]; track.mute = (bool)t["mute"]; track.solo = (bool)t["solo"];
-        track.gain = (float)juce::jlimit(0.0, 4.0, (double)t["gain"]);
+        track.gain = (float)juce::jlimit(0.0,16.0,(double)t["gain"]);
         track.inputChannel = juce::jlimit(-1, 63, t.hasProperty("input")?(int)t["input"]:-1);
         track.effectPresetId = effectPreset(t["effectPreset"].toString()).id;
         track.effectsBypassed = t.hasProperty("effectsBypassed")?(bool)t["effectsBypassed"]:true;
+        track.peakTamerEnabled=t.hasProperty("peakTamer")?(bool)t["peakTamer"]:false;
+        if(t["effectPreset"].toString()=="peak-tamer"){track.peakTamerEnabled=!track.effectsBypassed;track.effectPresetId="dry";track.effectsBypassed=true;}
         track.reverb.enabled=(bool)t["reverbEnabled"];
         track.reverb.style=validReverbStyle(t["reverbStyle"].toString());
         const double mix=t.hasProperty("reverbMix")?(double)t["reverbMix"]:0.2;
@@ -165,7 +168,7 @@ juce::Result exportMix(const Session& session, const juce::File& destination, do
     juce::AudioBuffer<float> trackBlock(2,1024);
     std::vector<TrackEffects> effects(session.tracks.size());
     for(size_t i=0;i<effects.size();++i)
-        effects[i].prepare(session.tracks[i].effectPresetId,session.tracks[i].effectsBypassed,sampleRate,session.tracks[i].reverb);
+        effects[i].prepare(session.tracks[i].effectPresetId,session.tracks[i].effectsBypassed,sampleRate,session.tracks[i].reverb,session.tracks[i].peakTamerEnabled);
     const auto count = (juce::int64)std::ceil(end * sampleRate);
     for (juce::int64 pos = 0; pos < count; pos += block.getNumSamples())
     {
@@ -223,7 +226,7 @@ MixLevelAnalysis analyseMixLevel(const Session& session,double sampleRate)
     if(end<=0||sampleRate<=0)return result;
     for(const auto& track:session.tracks)if(!track.mute&&(!anySolo||track.solo))for(const auto& clip:track.clips)end=std::max(end,clip.startSeconds+clip.lengthSeconds+reverbTailSeconds(track.reverb));
     juce::AudioBuffer<float> mix(2,1024),trackAudio(2,1024);std::vector<TrackEffects> effects(session.tracks.size());
-    for(size_t i=0;i<effects.size();++i)effects[i].prepare(session.tracks[i].effectPresetId,session.tracks[i].effectsBypassed,sampleRate,session.tracks[i].reverb);
+    for(size_t i=0;i<effects.size();++i)effects[i].prepare(session.tracks[i].effectPresetId,session.tracks[i].effectsBypassed,sampleRate,session.tracks[i].reverb,session.tracks[i].peakTamerEnabled);
     using Coeff=juce::dsp::IIR::Coefficients<float>;juce::dsp::IIR::Filter<float> hpL,hpR,shelfL,shelfR;
     hpL.coefficients=hpR.coefficients=Coeff::makeHighPass(sampleRate,38.135470876f,0.5003270373f);shelfL.coefficients=shelfR.coefficients=Coeff::makeHighShelf(sampleRate,1681.974451f,0.707175237f,juce::Decibels::decibelsToGain(4.0f));
     const int loudnessWindow=std::max(1,(int)std::llround(sampleRate*0.4)),hop=std::max(1,(int)std::llround(sampleRate*0.1));

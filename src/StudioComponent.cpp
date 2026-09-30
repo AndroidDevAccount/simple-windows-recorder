@@ -6,12 +6,13 @@
 #include "Diagnostics.h"
 #include <algorithm>
 #include <cmath>
+#include <map>
 
 namespace studio
 {
 namespace
 {
-constexpr int headerWidth = 280, rulerHeight = 38, trackHeight = 233;
+constexpr int headerWidth=280,rulerHeight=38,trackHeight=265;
 constexpr double tunerHoldMs = 1800.0, tunerFadeStartMs = 1200.0;
 const juce::Colour bg(0xff10151e), panel(0xff19212e), ink(0xffe8edf5), muted(0xff94a3b8), accent(0xff5ee0b5), red(0xffff657a);
 float waveformSample(float raw,const Clip& clip,const Track& track) noexcept{return raw*(float)clip.gain*track.gain;}
@@ -22,6 +23,20 @@ juce::MouseCursor razorCursor()
     static const juce::MouseCursor cursor=[]
     {juce::Image image(juce::Image::ARGB,32,32,true);juce::Graphics g(image);g.setColour(juce::Colour(0xffe8edf5));juce::Path blade;blade.addQuadrilateral(5,24,20,5,27,10,11,27);g.fillPath(blade);g.setColour(juce::Colour(0xff5ee0b5));g.drawLine(8,25,24,7,2);return juce::MouseCursor(image,8,25);}();
     return cursor;
+}
+juce::MouseCursor bombCursor()
+{
+    static const juce::MouseCursor cursor=[]
+    {juce::Image image(juce::Image::ARGB,32,32,true);juce::Graphics g(image);g.setColour(juce::Colour(0xff10151e));g.fillEllipse(6,10,19,19);g.setColour(juce::Colour(0xffe8edf5));g.drawEllipse(6,10,19,19,2);g.drawLine(20,11,25,5,2);g.setColour(juce::Colour(0xffffc778));g.fillEllipse(24,3,5,5);return juce::MouseCursor(image,15,20);}();
+    return cursor;
+}
+juce::MouseCursor grabCursor(bool closed)
+{
+    static const juce::MouseCursor open=[]
+    {juce::Image image(juce::Image::ARGB,32,32,true);juce::Graphics g(image);g.setColour(juce::Colour(0xffe8edf5));juce::Path hand;hand.startNewSubPath(8,15);hand.lineTo(8,8);hand.quadraticTo(8,5,10,6);hand.lineTo(11,13);hand.lineTo(11,5);hand.quadraticTo(12,2,14,5);hand.lineTo(14,13);hand.lineTo(15,4);hand.quadraticTo(17,2,18,5);hand.lineTo(18,13);hand.lineTo(20,6);hand.quadraticTo(23,5,22,9);hand.lineTo(22,16);hand.lineTo(26,13);hand.quadraticTo(29,13,27,17);hand.lineTo(21,27);hand.lineTo(12,27);hand.quadraticTo(9,23,8,15);g.fillPath(hand);g.setColour(juce::Colour(0xff10151e));g.strokePath(hand,juce::PathStrokeType(1.2f));return juce::MouseCursor(image,16,16);}();
+    static const juce::MouseCursor fist=[]
+    {juce::Image image(juce::Image::ARGB,32,32,true);juce::Graphics g(image);g.setColour(juce::Colour(0xffe8edf5));juce::Path hand;hand.addRoundedRectangle(7,10,19,14,5);hand.addRoundedRectangle(9,6,5,9,2);hand.addRoundedRectangle(14,5,5,10,2);hand.addRoundedRectangle(19,7,5,9,2);hand.addRoundedRectangle(8,20,13,8,3);g.fillPath(hand);g.setColour(juce::Colour(0xff10151e));g.drawRoundedRectangle(7,10,19,14,5,1.2f);return juce::MouseCursor(image,16,17);}();
+    return closed?fist:open;
 }
 void updateHeldPitch(PitchResult& displayed,double& lastValid,float& opacity,const PitchResult* measured,double now,bool audioAvailable)
 {
@@ -91,7 +106,7 @@ public:
         input.setTooltip("Recording source: "+owner.inputDescription(t.inputChannel<0?owner.defaultInput:t.inputChannel)+". Default follows the saved input at the top of the window.");
         gainLabel.setText("Gain",juce::dontSendNotification);gainLabel.setFont(juce::FontOptions(11.0f,juce::Font::bold));gainLabel.setColour(juce::Label::textColourId,muted);
         gain.setSliderStyle(juce::Slider::LinearHorizontal);gain.setTextBoxStyle(juce::Slider::TextBoxRight,false,54,22);
-        gain.setRange(-60.0,12.0,0.1);gain.setTextValueSuffix(" dB");gain.setDoubleClickReturnValue(true,0.0);
+        gain.setRange(-60.0,24.0,0.1);gain.setTextValueSuffix(" dB");gain.setDoubleClickReturnValue(true,0.0);
         gain.setValue(juce::Decibels::gainToDecibels(t.gain,-60.0f),juce::dontSendNotification);
         gain.setTooltip("Nondestructive playback gain. Double-click for 0 dB. The waveform grows with it; red lines mark 0 dBFS. Scarlett recording gain is unchanged.");
         gain.onDragStart = [this] { if (owner.editable()) owner.checkpoint(); };
@@ -100,7 +115,7 @@ public:
         int presetIndex=1;
         for(const auto& preset:effectPresets())
         {
-            if(juce::String(preset.id)=="dry")continue;
+            if(juce::String(preset.id)=="dry"||juce::String(preset.id)=="peak-tamer")continue;
             effects.addItem(preset.name,presetIndex);
             presetIds.push_back(preset.id);
             if(t.effectPresetId==preset.id)effects.setSelectedId(presetIndex,juce::dontSendNotification);
@@ -122,6 +137,10 @@ public:
         info.onClick=[this]{juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
             juce::String(effectPreset(model().effectPresetId).name)+(model().effectsBypassed?" (bypassed)":""),describeEffectPreset(model().effectPresetId),"Got it");};
         for(auto* c:std::initializer_list<juce::Component*>{&effects,&fx,&info}) addAndMakeVisible(c);
+        peakTamer.setButtonText("Peak tamer");peakTamer.setToggleState(t.peakTamerEnabled,juce::dontSendNotification);peakTamer.setTooltip("Independent transient control after the selected preset, reverb and Gain. Source audio remains untouched.");tamerInfo.setButtonText("?");
+        peakTamer.onClick=[this]{if(owner.editable()){owner.checkpoint();model().peakTamerEnabled=peakTamer.getToggleState();owner.changed();owner.message(model().peakTamerEnabled?"Peak tamer on: fast transient control and a final -1 dBFS track ceiling.":"Peak tamer off.");}};
+        tamerInfo.onClick=[] {juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,"Peak tamer",describeEffectPreset("peak-tamer"),"Got it");};
+        addAndMakeVisible(peakTamer);addAndMakeVisible(tamerInfo);
         verb.setButtonText("Verb");verb.setToggleState(t.reverb.enabled,juce::dontSendNotification);
         verb.setTooltip("Independent nondestructive reverb, after the EQ/compressor. Original takes stay dry.");
         style.addItem("Spring",1);style.addItem("Hall",2);style.addItem("Flerb",3);
@@ -150,9 +169,10 @@ public:
         title.setBounds(15, 7, 214, 26);
         arm.setBounds(17, 39, 45, 25); mute.setBounds(68, 39, 29, 25); solo.setBounds(102, 39, 29, 25);
         input.setBounds(17,71,246,25);gainLabel.setBounds(15,103,35,22);gainMinus.setBounds(48,102,27,24);gain.setBounds(79,103,151,22);gainPlus.setBounds(236,102,27,24);
-        fx.setBounds(10,138,44,25); effects.setBounds(55,138,175,25); info.setBounds(236,138,27,25);
-        verb.setBounds(10,170,67,25);style.setBounds(80,170,150,25);reverbInfo.setBounds(236,170,27,25);
-        mixLabel.setBounds(15,202,55,22);mix.setBounds(70,202,193,22);
+        fx.setBounds(10,138,44,25);effects.setBounds(55,138,175,25);info.setBounds(236,138,27,25);
+        peakTamer.setBounds(10,170,125,25);tamerInfo.setBounds(236,170,27,25);
+        verb.setBounds(10,202,67,25);style.setBounds(80,202,150,25);reverbInfo.setBounds(236,202,27,25);
+        mixLabel.setBounds(15,234,55,22);mix.setBounds(70,234,193,22);
     }
     void paint(juce::Graphics& g) override
     {
@@ -166,7 +186,7 @@ public:
         g.setColour(bg); g.fillRect(0, getHeight() - 1, getWidth(), 1);
     }
     void mouseDown(const juce::MouseEvent&) override { owner.selectedTrack = track; owner.selectedClipId.clear(); owner.timelineRepaint(); }
-    void update(){const bool can=owner.editable();for(auto* c:std::initializer_list<juce::Component*>{&title,&arm,&mute,&solo,&input,&gain,&gainMinus,&gainPlus,&effects,&verb,&style})c->setEnabled(can);fx.setEnabled(can&&model().effectPresetId!="dry");info.setEnabled(model().effectPresetId!="dry");mix.setEnabled(can&&model().reverb.enabled);repaint();}
+    void update(){const bool can=owner.editable();for(auto* c:std::initializer_list<juce::Component*>{&title,&arm,&mute,&solo,&input,&gain,&gainMinus,&gainPlus,&effects,&peakTamer,&verb,&style})c->setEnabled(can);fx.setEnabled(can&&model().effectPresetId!="dry");info.setEnabled(model().effectPresetId!="dry");mix.setEnabled(can&&model().reverb.enabled);repaint();}
 private:
     StudioComponent& owner;
     int track;
@@ -176,6 +196,8 @@ private:
     juce::ComboBox effects;
     juce::ToggleButton fx;
     juce::TextButton info;
+    juce::ToggleButton peakTamer;
+    juce::TextButton tamerInfo;
     juce::Slider gain;
     juce::TextButton gainMinus,gainPlus;
     std::vector<juce::String> presetIds;
@@ -189,7 +211,9 @@ private:
 class Timeline final : public juce::Component
 {
 public:
-    explicit Timeline(StudioComponent& s) : owner(s) { setMouseCursor(juce::MouseCursor::CrosshairCursor); }
+    explicit Timeline(StudioComponent& s):owner(s){setMouseCursor(juce::MouseCursor::CrosshairCursor);addAndMakeVisible(owner.addButton);owner.addButton.setTooltip("Add a recording track");}
+    void resized()override{owner.addButton.setBounds(headerWidth-35,6,27,26);}
+    void clearWaveformCache(){waveformCache.clear();repaint();}
     void refreshTransportCursor(){if(!owner.editable()){hoverPlayhead=dragPlayhead=false;setMouseCursor(juce::MouseCursor::NormalCursor);}}
     void paint(juce::Graphics& g) override
     {
@@ -228,31 +252,27 @@ public:
                 g.setColour(clip.id == owner.selectedClipId ? ink : colour.withAlpha(0.65f)); g.drawRoundedRectangle(rect, 5, clip.id == owner.selectedClipId ? 2.0f : 1.0f);
                 g.setColour(colour);g.setFont(11.0f);g.drawText("TAKE  "+formatTime(clip.startSeconds),rect.toNearestInt().reduced(8).removeFromTop(17),juce::Justification::left,true);
                 if (!clip.audio) continue;
-                float visibleRawPeak=0.0f;
-                const float displayGain=(float)clip.gain*track.gain;
-                const bool peakTamer=!track.effectsBypassed&&track.effectPresetId=="peak-tamer";
-                const float tamerCeiling=juce::Decibels::decibelsToGain(-1.0f);
+                const auto& preview=processedWaveform(clip,track);
+                float visibleRawPeak=0.0f,visibleProcessedPeak=0.0f;
                 const int left = std::max(headerWidth, (int)x + 2), right = std::min(getWidth(), (int)(x + w) - 2);
                 for (int px = left; px < right; ++px)
                 {
-                    double t0 = std::max(0.0, owner.timeAt((float)px) - clip.startSeconds) + clip.sourceOffsetSeconds;
-                    double t1 = std::min(clip.lengthSeconds, owner.timeAt((float)px + 1) - clip.startSeconds) + clip.sourceOffsetSeconds;
-                    int a = juce::jlimit(0, clip.audio->getNumSamples(), (int)(t0 * clip.sampleRate));
-                    int b = juce::jlimit(a, clip.audio->getNumSamples(), (int)std::ceil(t1 * clip.sampleRate));
-                    float min = 0, max = 0;
-                    const auto* data = clip.audio->getReadPointer(0);
-                    for (int n = a; n < b; ++n) { min = std::min(min, data[n]); max = std::max(max, data[n]); }
-                    visibleRawPeak=std::max(visibleRawPeak,std::max(max,-min));
-                    float shownMin=waveformSample(min,clip,track),shownMax=waveformSample(max,clip,track);
-                    if(peakTamer){shownMin=std::max(shownMin,-tamerCeiling);shownMax=std::min(shownMax,tamerCeiling);}
+                    const double local0=std::max(0.0,owner.timeAt((float)px)-clip.startSeconds);
+                    const double local1=std::min(clip.lengthSeconds,owner.timeAt((float)px+1)-clip.startSeconds);
+                    const int a=juce::jlimit(0,(int)preview.low.size(),(int)std::floor(local0*preview.pointsPerSecond));
+                    const int b=juce::jlimit(a,(int)preview.low.size(),(int)std::ceil(local1*preview.pointsPerSecond));
+                    float shownMin=0,shownMax=0;
+                    for(int n=a;n<b;++n){shownMin=std::min(shownMin,preview.low[(size_t)n]);shownMax=std::max(shownMax,preview.high[(size_t)n]);}
+                    visibleRawPeak=std::max(visibleRawPeak,preview.rawPeak);
+                    visibleProcessedPeak=std::max(visibleProcessedPeak,std::max(shownMax,-shownMin));
                     g.setColour(std::max(shownMax,-shownMin)>1.0f?red:colour);
                     g.drawVerticalLine(px,waveformCentre-waveformDisplay(shownMax)*fullScale,
                                           waveformCentre-waveformDisplay(shownMin)*fullScale+0.6f);
                 }
                 if(w>275&&visibleRawPeak>0)
-                {const auto rawDb=juce::Decibels::gainToDecibels(visibleRawPeak,-60.0f);const auto adjustedDb=juce::Decibels::gainToDecibels(visibleRawPeak*displayGain,-60.0f);
-                const auto peakText=inputRating(rawDb)+" INPUT | raw "+juce::String(rawDb,1)+" dBFS -> "+juce::String(adjustedDb,1)+" dBFS pre-FX"+(peakTamer?" | Peak tamer ceiling -1.0 dBFS":"");
-                g.setColour(!peakTamer&&adjustedDb>0?red:ink.withAlpha(0.72f));g.setFont(10.0f);g.drawText(peakText,(int)x+110,y+13,std::max(0,(int)w-120),16,juce::Justification::right,true);}
+                {const auto rawDb=juce::Decibels::gainToDecibels(visibleRawPeak,-60.0f);const auto outputDb=juce::Decibels::gainToDecibels(visibleProcessedPeak,-60.0f);
+                const auto peakText=inputRating(rawDb)+" INPUT | raw "+juce::String(rawDb,1)+" dBFS -> audible "+juce::String(outputDb,1)+" dBFS"+(track.peakTamerEnabled?" | Peak tamer on":"");
+                g.setColour(outputDb>0?red:ink.withAlpha(0.72f));g.setFont(10.0f);g.drawText(peakText,(int)x+110,y+13,std::max(0,(int)w-120),16,juce::Justification::right,true);}
             }
             if (owner.engine.isRecording() && track.armed && !owner.engine.isCountingIn())
             {
@@ -299,6 +319,8 @@ public:
             }
             g.restoreState();
         }
+        if(owner.editTool==2&&toolHoverX>=headerWidth&&toolHoverTrack>=0)
+        {const float top=(float)owner.audioTop()+toolHoverTrack*trackHeight+6,bottom=top+trackHeight-12;g.setColour(accent);g.drawLine(toolHoverX,top,toolHoverX,bottom,2.0f);juce::Path marker;marker.addTriangle(toolHoverX-6,top,toolHoverX+6,top,toolHoverX,top+8);g.fillPath(marker);}
         const float cursor = owner.xAt(owner.engine.position());
         if (cursor >= headerWidth && cursor < getWidth())
         {
@@ -310,7 +332,7 @@ public:
     void mouseDown(const juce::MouseEvent& e) override
     {
         if (!owner.editable() || e.x < headerWidth) return;
-        if(!owner.razorMode&&std::abs(e.position.x-owner.xAt(owner.engine.position()))<=8)
+        if(owner.editTool==0&&std::abs(e.position.x-owner.xAt(owner.engine.position()))<=8)
         {dragPlayhead=true;hoverPlayhead=true;setMouseCursor(juce::MouseCursor::DraggingHandCursor);repaint();return;}
         drag = false; mode = 0;
         owner.selectedClipId.clear();
@@ -324,21 +346,21 @@ public:
                 if (time >= clip.startSeconds && time < clip.startSeconds + clip.lengthSeconds)
                 {
                     owner.selectedClipId = clip.id; original = clip;
-                    if(owner.clipEditing&&!owner.razorMode)
-                        mode=std::abs(e.x-owner.xAt(clip.startSeconds))<7?1:(std::abs(e.x-owner.xAt(clip.startSeconds+clip.lengthSeconds))<7?2:3);
+                    if(owner.editTool==1)
+                    {mode=std::abs(e.x-owner.xAt(clip.startSeconds))<7?1:(std::abs(e.x-owner.xAt(clip.startSeconds+clip.lengthSeconds))<7?2:3);setMouseCursor(grabCursor(true));}
                     break;
                 }
             }
         }
         owner.setPlayhead(time);
-        if(owner.clipEditing&&owner.razorMode&&owner.selectedClip()!=nullptr)
-        {owner.splitSelected();owner.razorMode=false;owner.razorButton.setToggleState(false,juce::dontSendNotification);owner.message("Clip split at "+formatTime(time)+". Razor turned off; Undo restores the original clip.");}
+        if(owner.editTool==2&&owner.selectedClip()!=nullptr){owner.splitSelected();owner.message("Clip split at "+formatTime(time)+". Split stays active; Ctrl+Z undoes it.");}
+        else if(owner.editTool==3&&owner.selectedClip()!=nullptr)owner.deleteSelected();
         owner.updateControls();repaint();
     }
     void mouseDrag(const juce::MouseEvent& e) override
     {
         if(dragPlayhead && owner.editable()){owner.setPlayhead(owner.timeAt(e.position.x));repaint();return;}
-        if (!owner.editable()||!owner.clipEditing||mode==0||e.getDistanceFromDragStart()<5)return;
+        if(!owner.editable()||owner.editTool!=1||mode==0||e.getDistanceFromDragStart()<5)return;
         auto* clip = owner.selectedClip(); if (!clip) return;
         if (!drag) { owner.checkpoint(); drag = true; }
         const double delta = e.getDistanceFromDragStartX() / owner.pixelsPerSecond;
@@ -356,10 +378,10 @@ public:
         repaint();
     }
     void mouseMove(const juce::MouseEvent& e) override
-    {hoverPlayhead=owner.editable()&&!owner.razorMode&&e.x>=headerWidth&&std::abs(e.position.x-owner.xAt(owner.engine.position()))<=8;
-    bool overClip=false;if(owner.clipEditing&&owner.razorMode&&e.y>=owner.audioTop()){const int index=(e.y-owner.audioTop())/trackHeight;const auto time=owner.timeAt(e.position.x);if(juce::isPositiveAndBelow(index,(int)owner.engine.session().tracks.size()))for(const auto& clip:owner.engine.session().tracks[(size_t)index].clips)if(time>=clip.startSeconds&&time<clip.startSeconds+clip.lengthSeconds){overClip=true;break;}}
-    setMouseCursor(overClip?razorCursor():hoverPlayhead?juce::MouseCursor::PointingHandCursor:juce::MouseCursor::CrosshairCursor);repaint();}
-    void mouseExit(const juce::MouseEvent&) override {if(!dragPlayhead){hoverPlayhead=false;setMouseCursor(juce::MouseCursor::CrosshairCursor);repaint();}}
+    {hoverPlayhead=owner.editable()&&owner.editTool==0&&e.x>=headerWidth&&std::abs(e.position.x-owner.xAt(owner.engine.position()))<=8;bool overClip=false;toolHoverX=-1;toolHoverTrack=-1;
+    if(owner.editTool!=0&&e.y>=owner.audioTop()){const int index=(e.y-owner.audioTop())/trackHeight;const auto time=owner.timeAt(e.position.x);if(juce::isPositiveAndBelow(index,(int)owner.engine.session().tracks.size()))for(const auto& clip:owner.engine.session().tracks[(size_t)index].clips)if(time>=clip.startSeconds&&time<clip.startSeconds+clip.lengthSeconds){overClip=true;if(owner.editTool==2){toolHoverX=e.position.x;toolHoverTrack=index;}break;}}
+    setMouseCursor(overClip&&owner.editTool==1?grabCursor(false):overClip&&owner.editTool==2?razorCursor():overClip&&owner.editTool==3?bombCursor():hoverPlayhead?juce::MouseCursor::PointingHandCursor:juce::MouseCursor::CrosshairCursor);repaint();}
+    void mouseExit(const juce::MouseEvent&) override{if(!dragPlayhead){hoverPlayhead=false;toolHoverX=-1;toolHoverTrack=-1;setMouseCursor(juce::MouseCursor::CrosshairCursor);repaint();}}
     void mouseUp(const juce::MouseEvent& e) override
     {
         if(dragPlayhead){dragPlayhead=false;mouseMove(e);return;}
@@ -372,14 +394,54 @@ public:
             std::erase_if(track.clips, [&](const auto& c) { return c.id == replacement.id; });
             SessionEngine::insertPunch(track, replacement);
         }
-        owner.changed(); drag = false;
+        owner.changed();drag=false;mouseMove(e);
     }
 private:
+    struct WaveformPreview
+    {
+        std::vector<float> low,high;
+        float rawPeak=0;
+        double pointsPerSecond=500.0;
+    };
+    juce::String waveformKey(const Clip& clip,const Track& track) const
+    {
+        return clip.id+"|"+juce::String(clip.sourceOffsetSeconds,6)+"|"+juce::String(clip.lengthSeconds,6)+"|"+juce::String(clip.gain,6)+"|"+
+            track.effectPresetId+"|"+juce::String((int)track.effectsBypassed)+"|"+juce::String(track.gain,6)+"|"+juce::String((int)track.peakTamerEnabled)+"|"+
+            juce::String((int)track.reverb.enabled)+"|"+track.reverb.style+"|"+juce::String(track.reverb.mix,4);
+    }
+    const WaveformPreview& processedWaveform(const Clip& clip,const Track& track)
+    {
+        const auto key=waveformKey(clip,track);
+        if(auto found=waveformCache.find(key);found!=waveformCache.end())return found->second;
+        if(waveformCache.size()>48)waveformCache.clear();
+        WaveformPreview result;
+        const auto samples=std::max<int64_t>(0,(int64_t)std::ceil(clip.lengthSeconds*clip.sampleRate));
+        const int bins=std::max(1,(int)std::ceil(clip.lengthSeconds*result.pointsPerSecond));
+        result.low.assign((size_t)bins,0);result.high.assign((size_t)bins,0);
+        TrackEffects effects;effects.prepare(track.effectPresetId,track.effectsBypassed,clip.sampleRate,track.reverb,track.peakTamerEnabled);
+        constexpr int blockSize=2048;juce::AudioBuffer<float> block(2,blockSize);
+        for(int64_t base=0;base<samples;base+=blockSize)
+        {
+            const int count=(int)std::min<int64_t>(blockSize,samples-base);block.clear();
+            for(int ch=0;ch<2;++ch)
+            {
+                auto* out=block.getWritePointer(ch);const auto* source=clip.audio->getReadPointer(std::min(ch,clip.audio->getNumChannels()-1));
+                for(int i=0;i<count;++i)
+                {const auto sourceIndex=(int64_t)std::floor((clip.sourceOffsetSeconds+(base+i)/clip.sampleRate)*clip.sampleRate+1.0e-7);if(sourceIndex>=0&&sourceIndex<clip.audio->getNumSamples()){out[i]=source[sourceIndex]*(float)clip.gain;result.rawPeak=std::max(result.rawPeak,std::abs(source[sourceIndex]));}}
+            }
+            effects.process(block.getWritePointer(0),block.getWritePointer(1),count,track.gain);
+            for(int i=0;i<count;++i)
+            {const int bin=juce::jlimit(0,bins-1,(int)(((base+i)/clip.sampleRate)*result.pointsPerSecond));for(int ch=0;ch<2;++ch){const float value=block.getSample(ch,i);result.low[(size_t)bin]=std::min(result.low[(size_t)bin],value);result.high[(size_t)bin]=std::max(result.high[(size_t)bin],value);}}
+        }
+        return waveformCache.emplace(key,std::move(result)).first->second;
+    }
     StudioComponent& owner;
     Clip original;
     bool drag = false;
     bool hoverPlayhead=false,dragPlayhead=false;
     int mode = 0;
+    float toolHoverX=-1;int toolHoverTrack=-1;
+    std::map<juce::String,WaveformPreview> waveformCache;
 };
 
 StudioComponent::StudioComponent(bool preview) : previewMode(preview)
@@ -396,9 +458,8 @@ StudioComponent::StudioComponent(bool preview) : previewMode(preview)
     look.setColour(juce::ToggleButton::textColourId, muted);
     setLookAndFeel(&look); setWantsKeyboardFocus(true);
     for (auto* c : std::initializer_list<juce::Component*>{&name,&clock,&tempoLabel,&latencyLabel,&status,&guide,&zoomLabel,&masterLabel,&tempo,&zoom,&masterGain,&clickButton,&countButton,&viewport,&scroll}) addAndMakeVisible(c);
-    for(auto* b:{&fileButton,&homeButton,&playButton,&stopButton,&recordButton,&returnButton,&addButton,&deleteButton,&undoButton,&redoButton,&mixCheckButton})
+    for(auto* b:{&fileButton,&homeButton,&playButton,&stopButton,&recordButton,&returnButton,&handButton,&splitToolButton,&deleteButton,&mixCheckButton})
     { addAndMakeVisible(b); b->setWantsKeyboardFocus(false); }
-    for(auto* c:std::initializer_list<juce::Component*>{&editClipsButton,&razorButton})addAndMakeVisible(c);
     recordButton.setColour(juce::TextButton::buttonColourId, red.darker(0.35f));
     playButton.setColour(juce::TextButton::buttonColourId, accent.darker(0.65f));
     name.setFont(juce::FontOptions(22.0f, juce::Font::bold)); name.setEditable(false, true);
@@ -421,12 +482,14 @@ StudioComponent::StudioComponent(bool preview) : previewMode(preview)
     newButton.onClick=[this]{newSession();};openButton.onClick=[this]{openSession();};saveButton.onClick=[this]{save(true);};exportButton.onClick=[this]{exportFile();};settingsButton.onClick=[this]{openAudioSetup();};fileButton.onClick=[this]{showFileMenu();};
     homeButton.onClick=[this]{setPlayhead(0); viewStart=0; resized();}; returnButton.onClick=[this]{setPlayhead(lastRecordStart);};
     playButton.onClick=[this]{beginPlay();}; stopButton.onClick=[this]{stopTransport();}; recordButton.onClick=[this]{beginRecord();};
-    addButton.onClick=[this]{addTrack();}; importButton.onClick=[this]{importFile();}; splitButton.onClick=[this]{splitSelected();}; deleteButton.onClick=[this]{deleteSelected();};
+    addButton.onClick=[this]{addTrack();}; importButton.onClick=[this]{importFile();}; splitButton.onClick=[this]{splitSelected();};
     undoButton.onClick=[this]{undo(false);}; redoButton.onClick=[this]{undo(true);}; levelButton.onClick=[this]{autoLevel();};mixCheckButton.onClick=[this]{checkMix();};
-    editClipsButton.setTooltip("Off by default: recordings are locked against accidental moving, trimming, splitting and deleting.");
-    razorButton.setTooltip("With Edit clips enabled, click a waveform to split it at that exact point.");razorButton.setEnabled(false);
-    editClipsButton.onClick=[this]{clipEditing=editClipsButton.getToggleState();if(!clipEditing){razorMode=false;razorButton.setToggleState(false,juce::dontSendNotification);selectedClipId.clear();}razorButton.setEnabled(clipEditing&&editable());message(clipEditing?"Clip editing unlocked. Enable Razor to split; drag clips/edges to move or trim.":"Recordings locked against timeline edits.");timelineRepaint();};
-    razorButton.onClick=[this]{if(!clipEditing){razorButton.setToggleState(false,juce::dontSendNotification);return;}razorMode=razorButton.getToggleState();message(razorMode?"Razor active: click a waveform to split it.":"Razor off.");timelineRepaint();};
+    handButton.setTooltip("Hand tool: move a clip, or drag its left/right edge to trim. Click again to lock clips.");
+    splitToolButton.setTooltip("Split tool: shows the cut line and stays active for repeated cuts. Click again to turn it off.");
+    deleteButton.setTooltip("Delete tool: the bomb removes the clip you click. The source recording stays on disk; Ctrl+Z restores it.");
+    handButton.onClick=[this]{setEditTool(editTool==1?0:1);};
+    splitToolButton.onClick=[this]{setEditTool(editTool==2?0:2);};
+    deleteButton.onClick=[this]{setEditTool(editTool==3?0:3);};
     timeline = std::make_unique<Timeline>(*this); viewport.setViewedComponent(timeline.get(), false); viewport.setScrollBarsShown(true, false);
     // The UI timer reads the horizontal scrollbar without involving the audio callback.
     juce::PropertiesFile::Options options; options.applicationName="Workspace"; options.filenameSuffix=".settings"; options.folderName="SimpleWindowsRecorder"; options.osxLibrarySubFolder="Application Support";
@@ -437,7 +500,7 @@ StudioComponent::StudioComponent(bool preview) : previewMode(preview)
     defaultTracksButton.onClick=[this]{if(!editable())return;checkpoint();for(auto& track:engine.session().tracks)track.inputChannel=-1;changed(true);message("All tracks now follow the saved default recording input.");};
     defaultInputSelector.setTooltip("Saved default recording input. New tracks all follow this. Track menus can explicitly override it.");
     defaultInputSelector.onChange=[this]{if(!editable())return;defaultInput=defaultInputSelector.getSelectedId()-1;engine.setDefaultInput(defaultInput);if(!previewMode){workspace->setValue("defaultInput",defaultInput);workspace->saveIfNeeded();}message("Default recording input: "+inputDescription(defaultInput));changed(true);};
-    diagnosticsButton.onClick=[this]{showDiagnostics("Take One 0.8.0\nAudio status: "+audioSetup.message+"\nLatest error: "+observedError+"\nDefault input: "+inputDescription(defaultInput)+"\nProject: "+projectFile.getFullPathName());};
+    diagnosticsButton.onClick=[this]{showDiagnostics("Take One 0.8.1\nAudio status: "+audioSetup.message+"\nLatest error: "+observedError+"\nDefault input: "+inputDescription(defaultInput)+"\nProject: "+projectFile.getFullPathName());};
     retryButton.onClick=[this]{retryAudio();};
     tunerTitle.setText("Tuner",juce::dontSendNotification);tunerTitle.setFont(juce::FontOptions(12.0f,juce::Font::bold));
     tunerDisplay.setFont(juce::FontOptions(15.0f,juce::Font::bold));
@@ -466,7 +529,7 @@ bool StudioComponent::editable() const { return !engine.isBusy() && !exporting &
 void StudioComponent::message(const juce::String& s) {if(s!=status.getText())logEvent(s);status.setText(s, juce::dontSendNotification); }
 void StudioComponent::timelineRepaint() { timeline->repaint(); for(auto& h:trackHeaders)h->repaint(); }
 void StudioComponent::checkpoint() { history.push_back(engine.session()); if(history.size()>30) history.erase(history.begin()); future.clear(); }
-void StudioComponent::changed(bool rebuild) { dirty=true; pendingRebuild |= rebuild; updateControls(); timeline->repaint(); }
+void StudioComponent::changed(bool rebuild) { dirty=true; pendingRebuild |= rebuild; updateControls(); timeline->clearWaveformCache(); }
 bool StudioComponent::save(bool show)
 {
     if (previewMode || projectFile == juce::File()) return true;
@@ -490,7 +553,7 @@ void StudioComponent::restoreWorkspace()
 void StudioComponent::newSession()
 {
     if(!editable()) return;
-    if(!save())return; history.clear(); future.clear(); selectedClipId.clear(); selectedTrack=0;
+    if(!save())return; history.clear(); future.clear(); selectedClipId.clear(); selectedTrack=0;editTool=0;
     engine.session()=Session{};
     for(int i=0;i<3;++i) { Track t; t.id=juce::Uuid().toString(); t.name=juce::StringArray{"Voice","Guitar","Bass"}[i]; t.armed=i==0; t.inputChannel=-1; engine.session().tracks.push_back(t); }
     const auto folder=juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("Simple Recorder Sessions")
@@ -509,7 +572,7 @@ void StudioComponent::openSession()
         if(!safe->editable() || c.getResult()==juce::File()) return;
         Session next; double time=0; const auto r=loadProject(next,c.getResult(),time);
         if(r.failed()) { safe->message(r.getErrorMessage()); return; }
-        safe->engine.session()=std::move(next); safe->projectFile=c.getResult(); safe->engine.seek(time); safe->history.clear(); safe->future.clear(); safe->selectedClipId.clear(); safe->selectedTrack=0; safe->viewStart=0; safe->rebuildTracks(); safe->save(); safe->message("Session opened. All source takes are preserved.");
+        safe->engine.session()=std::move(next); safe->projectFile=c.getResult(); safe->engine.seek(time); safe->history.clear(); safe->future.clear(); safe->selectedClipId.clear(); safe->selectedTrack=0; safe->editTool=0; safe->viewStart=0; safe->rebuildTracks(); safe->save(); safe->message("Session opened. All source takes are preserved.");
     });
 }
 void StudioComponent::addTrack()
@@ -524,16 +587,29 @@ Clip* StudioComponent::selectedClip()
 }
 void StudioComponent::deleteSelected()
 {
-    if(!editable()||!clipEditing){message("Enable Edit clips before deleting audio from the timeline.");return;}if(!selectedClip())return;checkpoint();auto& clips=engine.session().tracks[(size_t)selectedTrack].clips;
+    if(!editable()||editTool!=3){message("Choose Delete, then click the clip you want to remove.");return;}if(!selectedClip())return;checkpoint();auto& clips=engine.session().tracks[(size_t)selectedTrack].clips;
     std::erase_if(clips,[this](auto& c){return c.id==selectedClipId;}); selectedClipId.clear(); changed(); message("Clip removed from the timeline. Undo restores it; its source file is retained.");
 }
 void StudioComponent::splitSelected()
 {
-    if(!editable()||!clipEditing)return;auto* c=selectedClip();if(!c)return;
+    if(!editable()||editTool!=2)return;auto* c=selectedClip();if(!c)return;
     const double delta=engine.position()-c->startSeconds;
     if(delta<=0.001 || delta>=c->lengthSeconds-0.001) return;
     checkpoint(); Clip right=*c; right.id=juce::Uuid().toString(); right.startSeconds+=delta; right.sourceOffsetSeconds+=delta; right.lengthSeconds-=delta; c->lengthSeconds=delta;
     engine.session().tracks[(size_t)selectedTrack].clips.push_back(right); changed();
+}
+void StudioComponent::setEditTool(int tool)
+{
+    if(!editable())return;
+    editTool=juce::jlimit(0,3,tool);selectedClipId.clear();
+    handButton.setToggleState(editTool==1,juce::dontSendNotification);
+    splitToolButton.setToggleState(editTool==2,juce::dontSendNotification);
+    deleteButton.setToggleState(editTool==3,juce::dontSendNotification);
+    if(editTool==0)message("Clips locked. Choose Hand, Split or Delete to edit audio.");
+    else if(editTool==1)message("Hand active: drag a clip to move it, or drag an edge to trim. Ctrl+Z undoes.");
+    else if(editTool==2)message("Split active: the guide shows the cut point. Click repeatedly to split; Ctrl+Z undoes each cut.");
+    else message("Delete active: click a clip with the bomb. Source recordings remain on disk; Ctrl+Z restores them.");
+    updateControls();timelineRepaint();
 }
 void StudioComponent::autoLevel()
 {
@@ -644,9 +720,9 @@ void StudioComponent::updateControls()
 {
     const bool can=editable();
     defaultInputSelector.setEnabled(can);retryButton.setEnabled(can&&!applicationFault);defaultTracksButton.setEnabled(can);
-    for(auto* c:std::initializer_list<juce::Component*>{&fileButton,&homeButton,&returnButton,&playButton,&recordButton,&addButton,&undoButton,&redoButton,&mixCheckButton,&masterGain,&tempo,&clickButton,&countButton,&name,&clock})c->setEnabled(can);
-    editClipsButton.setEnabled(can);razorButton.setEnabled(can&&clipEditing);deleteButton.setEnabled(can&&clipEditing&&selectedClip()!=nullptr);
-    stopButton.setEnabled(engine.isBusy()); undoButton.setEnabled(can&&!history.empty()); redoButton.setEnabled(can&&!future.empty());
+    for(auto* c:std::initializer_list<juce::Component*>{&fileButton,&homeButton,&returnButton,&playButton,&recordButton,&addButton,&mixCheckButton,&masterGain,&tempo,&clickButton,&countButton,&name,&clock,&handButton,&splitToolButton,&deleteButton})c->setEnabled(can);
+    handButton.setToggleState(editTool==1,juce::dontSendNotification);splitToolButton.setToggleState(editTool==2,juce::dontSendNotification);deleteButton.setToggleState(editTool==3,juce::dontSendNotification);
+    stopButton.setEnabled(engine.isBusy());
     playButton.setEnabled(can&&engine.sampleRate()>0&&!applicationFault);recordButton.setEnabled(can&&engine.sampleRate()>0&&!applicationFault);
     const bool offline=!previewMode&&engine.sampleRate()<=0;
     guide.setColour(juce::Label::textColourId,offline||applicationFault?red:muted);
@@ -698,8 +774,10 @@ void StudioComponent::timerCallback()
 bool StudioComponent::keyPressed(const juce::KeyPress& k)
 {
     if(k.getKeyCode()==juce::KeyPress::spaceKey) {if(engine.isBusy()) stopTransport(); else beginPlay();return true;}
-    if(k.getModifiers().isCommandDown()&&k.getTextCharacter()=='z') {undo(k.getModifiers().isShiftDown());return true;}
-    if(k.getModifiers().isCommandDown()&&k.getTextCharacter()=='s') {save(true);return true;}
+    const auto character=juce::CharacterFunctions::toLowerCase(k.getKeyCode());
+    if(k.getModifiers().isCommandDown()&&character=='z') {undo(k.getModifiers().isShiftDown());return true;}
+    if(k.getModifiers().isCommandDown()&&character=='y') {undo(true);return true;}
+    if(k.getModifiers().isCommandDown()&&character=='s') {save(true);return true;}
     if(k.getTextCharacter()=='r'||k.getTextCharacter()=='R') {beginRecord();return true;}
     if(k.getKeyCode()==juce::KeyPress::deleteKey||k.getKeyCode()==juce::KeyPress::backspaceKey) {deleteSelected();return true;}
     if(k.getKeyCode()==juce::KeyPress::returnKey) {setPlayhead(lastRecordStart);return true;}
@@ -717,7 +795,7 @@ void StudioComponent::paint(juce::Graphics& g)
 void StudioComponent::resized()
 {
     const int w=getWidth(),h=getHeight();
-    name.setBounds(32,14,std::max(180,w-170),32);guide.setBounds(32,44,w-150,20);fileButton.setBounds(w-94,22,74,28);
+    fileButton.setBounds(18,22,74,28);name.setBounds(108,14,std::max(180,w-240),32);guide.setBounds(108,44,w-220,20);
     int x=18;
     homeButton.setBounds(18,88,38,34);playButton.setBounds(62,88,62,34);stopButton.setBounds(130,88,62,34);recordButton.setBounds(198,88,76,34);returnButton.setBounds(280,88,62,34);
     clock.setBounds(354,85,140,42);
@@ -725,7 +803,7 @@ void StudioComponent::resized()
     latencyLabel.setBounds(694,76,std::max(80,w-710),24);latencyLabel.setFont(12.0f);latencyLabel.setColour(juce::Label::textColourId,muted);
     defaultInputSelector.setBounds(694,107,std::max(100,w-710),25);diagnosticsButton.setBounds(18,h-30,112,24);retryButton.setBounds(138,h-30,100,24);defaultTracksButton.setBounds(246,h-30,140,24);
     masterLabel.setBounds(w-455,h-30,48,24);masterGain.setBounds(w-407,h-30,160,24);mixCheckButton.setBounds(w-237,h-30,100,24);
-    addButton.setBounds(x,157,72,27);x+=78;undoButton.setBounds(x,157,66,27);x+=72;redoButton.setBounds(x,157,66,27);x+=72;editClipsButton.setBounds(x,157,86,27);x+=92;razorButton.setBounds(x,157,68,27);x+=74;deleteButton.setBounds(x,157,66,27);
+    handButton.setBounds(x,157,66,27);x+=72;splitToolButton.setBounds(x,157,66,27);x+=72;deleteButton.setBounds(x,157,66,27);
     zoomLabel.setBounds(w-190,157,40,27);zoom.setBounds(w-150,157,130,27);
     tunerTitle.setBounds(18,198,45,30);tunerInput.setBounds(68,200,155,26);tunerDisplay.setBounds(235,197,235,32);
     viewport.setBounds(16,238,w-32,std::max(100,h-331));
@@ -756,10 +834,20 @@ bool StudioComponent::runFeedbackUiChecks(juce::String& report)
     if(std::abs(studio.engine.position()-32)>1e-6||studio.engine.session().tracks[1].clips[0].startSeconds!=0||!studio.history.empty())return fail("playhead drag edited a clip or failed to seek");
     const juce::Point<float> locked{studio.xAt(15),(float)(studio.audioTop()+trackHeight+60)};studio.timeline->mouseDown(event(locked,locked,false));studio.timeline->mouseDrag(event(locked.translated(64,0),locked,true));studio.timeline->mouseUp(event(locked.translated(64,0),locked,true));
     if(studio.engine.session().tracks[1].clips.size()!=1||studio.engine.session().tracks[1].clips[0].startSeconds!=0)return fail("locked clip moved");
-    studio.clipEditing=true;studio.editClipsButton.setToggleState(true,juce::dontSendNotification);studio.razorMode=true;studio.razorButton.setToggleState(true,juce::dontSendNotification);
-    const juce::Point<float> cut{studio.xAt(20),(float)(studio.audioTop()+trackHeight+60)};studio.timeline->mouseMove(event(cut,cut,false));if(studio.timeline->getMouseCursor()==juce::MouseCursor(juce::MouseCursor::CrosshairCursor))return fail("razor cursor missing");studio.timeline->mouseDown(event(cut,cut,false));
-    if(studio.engine.session().tracks[1].clips.size()!=2||studio.razorMode||std::abs(studio.engine.session().tracks[1].clips[0].lengthSeconds-20)>1e-6||std::abs(studio.engine.session().tracks[1].clips[1].sourceOffsetSeconds-20)>1e-6)return fail("razor did not split at click or turn off");
-    studio.undo(false);if(studio.engine.session().tracks[1].clips.size()!=1)return fail("razor split undo failed");studio.clipEditing=false;studio.editClipsButton.setToggleState(false,juce::dontSendNotification);
+    studio.setEditTool(2);
+    const juce::Point<float> cut{studio.xAt(20),(float)(studio.audioTop()+trackHeight+60)};studio.timeline->mouseMove(event(cut,cut,false));if(studio.timeline->getMouseCursor()==juce::MouseCursor(juce::MouseCursor::CrosshairCursor))return fail("split cursor missing");studio.timeline->mouseDown(event(cut,cut,false));
+    if(studio.engine.session().tracks[1].clips.size()!=2||studio.editTool!=2||std::abs(studio.engine.session().tracks[1].clips[0].lengthSeconds-20)>1e-6||std::abs(studio.engine.session().tracks[1].clips[1].sourceOffsetSeconds-20)>1e-6)return fail("persistent Split tool cut at the wrong point");
+    const juce::Point<float> cutAgain{studio.xAt(25),(float)(studio.audioTop()+trackHeight+60)};studio.timeline->mouseMove(event(cutAgain,cutAgain,false));studio.timeline->mouseDown(event(cutAgain,cutAgain,false));
+    if(studio.engine.session().tracks[1].clips.size()!=3||studio.editTool!=2)return fail("Split did not remain active for a second cut");
+    const auto command=juce::ModifierKeys::commandModifier;
+    studio.keyPressed(juce::KeyPress('z',command,0));if(studio.engine.session().tracks[1].clips.size()!=2)return fail("first Ctrl+Z did not undo one edit");
+    studio.keyPressed(juce::KeyPress('z',command,0));if(studio.engine.session().tracks[1].clips.size()!=1)return fail("second Ctrl+Z did not walk further back through history");
+    studio.keyPressed(juce::KeyPress('y',command,0));if(studio.engine.session().tracks[1].clips.size()!=2)return fail("Ctrl+Y did not redo");
+    studio.keyPressed(juce::KeyPress('z',command,0));
+    studio.setEditTool(1);studio.timeline->mouseMove(event(locked,locked,false));if(studio.timeline->getMouseCursor()!=grabCursor(false))return fail("Hand tool cursor missing");
+    studio.timeline->mouseDown(event(locked,locked,false));if(studio.timeline->getMouseCursor()!=grabCursor(true))return fail("Hand did not close while grabbing");
+    studio.setEditTool(3);studio.timeline->mouseMove(event(locked,locked,false));studio.timeline->mouseDown(event(locked,locked,false));if(!studio.engine.session().tracks[1].clips.empty())return fail("Delete tool did not remove clicked clip");
+    studio.keyPressed(juce::KeyPress('z',command,0));if(studio.engine.session().tracks[1].clips.size()!=1)return fail("Ctrl+Z did not restore deleted clip");studio.setEditTool(0);
     const int withClick=studio.trackHeaders[0]->getY();studio.engine.session().metronome=false;studio.resized();
     if(withClick-studio.trackHeaders[0]->getY()!=72)return fail("metronome lane layout offset");
     studio.engine.session().metronome=true;studio.resized();studio.setPlayhead(30);
@@ -779,7 +867,7 @@ bool StudioComponent::runFeedbackUiChecks(juce::String& report)
     if(studio.engine.isBusy()||std::abs(studio.engine.position()-30)>1e-6||std::abs(studio.viewStart-10)>1e-6)return fail("UI stop did not return cursor/view");
     studio.beginPlay();if(std::abs(studio.engine.position()-30)>1e-6)return fail("audition didn't start at punch");
     studio.engine.stop();studio.engine.audioDeviceIOCallbackWithContext(inputs,2,outputs,2,256,{});studio.engine.audioDeviceStopped();
-    report+="PASS feedback UI: tuner persistence; locked clips resist dragging; razor cursor/click split/source offset/auto-off/Undo; playhead drag; metronome offset; live waveform; Stop return and audition.\n";
+    report+="PASS feedback UI: tuner persistence; locked clips; persistent Split guide/cursor; multi-level Ctrl+Z/Ctrl+Y; Hand and Delete tools; playhead drag; metronome offset; live waveform; Stop return and audition.\n";
     return true;
 }
 void StudioComponent::loadPreview()

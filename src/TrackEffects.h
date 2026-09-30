@@ -23,7 +23,7 @@ juce::String describeEffectPreset(const juce::String& id);
 class TrackEffects
 {
 public:
-    void prepare(const juce::String& presetId, bool bypass, double sampleRate, const ReverbSettings& reverb = {});
+    void prepare(const juce::String& presetId,bool bypass,double sampleRate,const ReverbSettings& reverb={},bool peakTamer=false);
     void process(float* left,float* right,int count,float postGain=1.0f) noexcept;
 private:
     struct Biquad
@@ -33,8 +33,8 @@ private:
         float tick(float x) noexcept;
     };
     std::array<std::array<Biquad, 3>, 2> filters;
-    bool dry=true;
-    float envelope=0, attack=0, release=0, threshold=-18, slope=0,limiterCeiling=2.0f;
+    bool dry=true,tamePeaks=false;
+    float envelope=0,attack=0,release=0,threshold=-18,slope=0,limiterCeiling=2.0f,tamerEnvelope=0,tamerAttack=0,tamerRelease=0;
     std::unique_ptr<TrackReverb> reverb;
 };
 struct Track;

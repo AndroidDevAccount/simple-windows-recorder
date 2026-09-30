@@ -44,17 +44,17 @@ float TrackEffects::Biquad::tick(float x) noexcept
     z1=c[1]*x-c[4]*y+z2; z2=c[2]*x-c[5]*y;
     return y;
 }
-void TrackEffects::prepare(const juce::String& id, bool bypass, double rate, const ReverbSettings& settings)
+void TrackEffects::prepare(const juce::String& id,bool bypass,double rate,const ReverbSettings& settings,bool peakTamer)
 {
     reverb.reset();
     if(settings.enabled && settings.mix>0){reverb=std::make_unique<TrackReverb>();reverb->prepare(settings,rate);}
     const auto& p=effectPreset(id);
     dry=bypass || p.highPass==0;
-    limiterCeiling=id=="peak-tamer"?juce::Decibels::decibelsToGain(-1.0f):2.0f;
+    tamePeaks=peakTamer||(!bypass&&id=="peak-tamer");limiterCeiling=tamePeaks?juce::Decibels::decibelsToGain(-1.0f):2.0f;tamerEnvelope=0;
+    rate=std::max(8000.0,rate);tamerAttack=(float)std::exp(-1.0/(rate*0.0002));tamerRelease=(float)std::exp(-1.0/(rate*0.08));
     envelope=0;
     for(auto& channel:filters) for(auto& filter:channel) filter=Biquad{};
     if(dry) return;
-    rate=std::max(8000.0,rate);
     using Coeff=juce::dsp::IIR::ArrayCoefficients<float>;
     const auto freq=[rate](float hz){return std::min(hz,(float)(rate*0.45));};
     const std::array<std::array<float,6>,3> coefficients {{
@@ -78,7 +78,7 @@ void TrackEffects::process(float* left,float* right,int count,float postGain) no
     }
     if(reverb)reverb->process(left,right,count);
     for(int i=0;i<count;++i)
-    {left[i]*=postGain;right[i]*=postGain;const float outputPeak=std::max(std::abs(left[i]),std::abs(right[i]));if(outputPeak>limiterCeiling){const float limit=limiterCeiling/outputPeak;left[i]*=limit;right[i]*=limit;}}
+    {left[i]*=postGain;right[i]*=postGain;float outputPeak=std::max(std::abs(left[i]),std::abs(right[i]));if(tamePeaks){const float coefficient=outputPeak>tamerEnvelope?tamerAttack:tamerRelease;tamerEnvelope=coefficient*tamerEnvelope+(1-coefficient)*outputPeak;const float db=juce::Decibels::gainToDecibels(tamerEnvelope,-100.0f);const float tameGain=juce::Decibels::decibelsToGain(std::max(0.0f,db+12.0f)*(1.0f/8.0f-1.0f));left[i]*=tameGain;right[i]*=tameGain;outputPeak=std::max(std::abs(left[i]),std::abs(right[i]));if(outputPeak>limiterCeiling){const float limit=limiterCeiling/outputPeak;left[i]*=limit;right[i]*=limit;}}}
 }
 void renderTrackAudio(const Track& track,double start,double rate,float* left,float* right,int count) noexcept
 {
