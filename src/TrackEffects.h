@@ -2,6 +2,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include <array>
+#include "TrackReverb.h"
 
 namespace studio
 {
@@ -22,7 +23,7 @@ juce::String describeEffectPreset(const juce::String& id);
 class TrackEffects
 {
 public:
-    void prepare(const juce::String& presetId, bool bypass, double sampleRate);
+    void prepare(const juce::String& presetId, bool bypass, double sampleRate, const ReverbSettings& reverb = {});
     void process(float* left, float* right, int count) noexcept;
 private:
     struct Biquad
@@ -34,6 +35,7 @@ private:
     std::array<std::array<Biquad, 3>, 2> filters;
     bool dry=true;
     float envelope=0, attack=0, release=0, threshold=-18, slope=0;
+    std::unique_ptr<TrackReverb> reverb;
 };
 struct Track;
 // Shared dry renderer ensures playback/export have identical clip boundaries.

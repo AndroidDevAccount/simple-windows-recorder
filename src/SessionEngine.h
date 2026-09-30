@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include <memory>
 #include <vector>
+#include "TrackReverb.h"
 
 namespace studio
 {
@@ -25,6 +26,7 @@ struct Track
     float gain = 1.0f;
     juce::String effectPresetId { "dry" };
     bool effectsBypassed = false;
+    ReverbSettings reverb;
     // Zero-based physical device input channel, not callback-array index.
     int inputChannel = 0;
     std::vector<Clip> clips;

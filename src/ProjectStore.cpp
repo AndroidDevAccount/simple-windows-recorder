@@ -48,6 +48,9 @@ juce::Result saveProject(const Session& session, const juce::File& file, double 
         t->setProperty("input", track.inputChannel);
         t->setProperty("effectPreset", track.effectPresetId);
         t->setProperty("effectsBypassed", track.effectsBypassed);
+        t->setProperty("reverbEnabled",track.reverb.enabled);
+        t->setProperty("reverbStyle",track.reverb.style);
+        t->setProperty("reverbMix",track.reverb.mix);
         juce::Array<juce::var> clips;
         for (const auto& clip : track.clips)
         {
@@ -92,6 +95,10 @@ juce::Result loadProject(Session& session, const juce::File& file, double& playh
         track.inputChannel = juce::jlimit(0, 63, (int)t["input"]);
         track.effectPresetId = effectPreset(t["effectPreset"].toString()).id;
         track.effectsBypassed = (bool)t["effectsBypassed"];
+        track.reverb.enabled=(bool)t["reverbEnabled"];
+        track.reverb.style=validReverbStyle(t["reverbStyle"].toString());
+        const double mix=t.hasProperty("reverbMix")?(double)t["reverbMix"]:0.2;
+        track.reverb.mix=std::isfinite(mix)?(float)juce::jlimit(0.0,1.0,mix):0.2f;
         for (const auto& c : *t["clips"].getArray())
         {
             Clip clip;
@@ -140,6 +147,10 @@ juce::Result exportMix(const Session& session, const juce::File& destination, do
     bool anySolo = false;
     for (const auto& t : session.tracks) { anySolo |= t.solo; for (const auto& c : t.clips) end = std::max(end, c.startSeconds + c.lengthSeconds); }
     if (end <= 0) return juce::Result::fail("Record or import something before exporting.");
+    const double dryEnd=end;
+    for(const auto& t:session.tracks)
+        if(!t.mute && (!anySolo || t.solo))
+            for(const auto& c:t.clips)end=std::max(end,c.startSeconds+c.lengthSeconds+reverbTailSeconds(t.reverb));
     juce::TemporaryFile temporary(destination);
     std::unique_ptr<juce::FileOutputStream> stream(temporary.getFile().createOutputStream());
     if (!stream || !stream->openedOk()) return juce::Result::fail("Could not create the export file.");
@@ -152,7 +163,7 @@ juce::Result exportMix(const Session& session, const juce::File& destination, do
     juce::AudioBuffer<float> trackBlock(2,1024);
     std::vector<TrackEffects> effects(session.tracks.size());
     for(size_t i=0;i<effects.size();++i)
-        effects[i].prepare(session.tracks[i].effectPresetId,session.tracks[i].effectsBypassed,sampleRate);
+        effects[i].prepare(session.tracks[i].effectPresetId,session.tracks[i].effectsBypassed,sampleRate,session.tracks[i].reverb);
     const auto count = (juce::int64)std::ceil(end * sampleRate);
     for (juce::int64 pos = 0; pos < count; pos += block.getNumSamples())
     {
@@ -167,7 +178,11 @@ juce::Result exportMix(const Session& session, const juce::File& destination, do
             for(int ch=0;ch<2;++ch) block.addFrom(ch,0,trackBlock,ch,0,n,track.gain);
         }
         for (int ch = 0; ch < 2; ++ch)
-            for (int i = 0; i < n; ++i) block.setSample(ch, i, juce::jlimit(-1.0f, 1.0f, block.getSample(ch, i)));
+            for (int i = 0; i < n; ++i)
+            {
+                const float fade=end>dryEnd?(float)juce::jlimit(0.0,1.0,(end-(pos+i)/sampleRate)/0.1):1.0f;
+                block.setSample(ch,i,juce::jlimit(-1.0f,1.0f,block.getSample(ch,i)*fade));
+            }
         if (!writer->writeFromAudioSampleBuffer(block, 0, n)) return juce::Result::fail("The disk could not finish the export.");
     }
     writer.reset();

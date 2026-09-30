@@ -10,21 +10,22 @@ class RecorderApplication final : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "Simple Recorder"; }
-    const juce::String getApplicationVersion() override { return "0.3.0"; }
+    const juce::String getApplicationVersion() override { return "0.4.0"; }
     bool moreThanOneInstanceAllowed() override
     { return getCommandLineParameters().contains("--self-test") || getCommandLineParameters().contains("--preview"); }
     void initialise(const juce::String& args) override
     {
         if(args.contains("--self-test"))
         {
-            juce::String a,b,c,d;
+            juce::String a,b,c,d,e;
             const bool engine = studio::runEngineTests(a);
             const bool prefs = studio::runPreferenceTests(b);
             const bool projects = studio::runProjectTests(c);
             const bool effects = studio::runEffectTests(d);
-            const auto report = a+"\n"+b+"\n"+c+"\n"+d+"\n";
+            const bool reverb = studio::runReverbTests(e);
+            const auto report = a+"\n"+b+"\n"+c+"\n"+d+"\n"+e+"\n";
             juce::File::getCurrentWorkingDirectory().getChildFile("test-results.txt").replaceWithText(report);
-            setApplicationReturnValue(engine && prefs && projects && effects ? 0 : 1);
+            setApplicationReturnValue(engine && prefs && projects && effects && reverb ? 0 : 1);
             quit(); return;
         }
         const bool preview=args.contains("--preview");

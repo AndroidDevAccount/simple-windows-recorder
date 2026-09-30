@@ -33,7 +33,7 @@ juce::String describeEffectPreset(const juce::String& id)
         text += "\n3. Clarity EQ: +" + juce::String(p.presenceDb,1) + " dB at " + juce::String(p.presenceHz,0) + " Hz. Helps detail come through. Both EQ bands use Q 0.8.";
         text += "\n4. Compressor: " + juce::String(p.ratio,1) + ":1 above " + juce::String(p.thresholdDb,0) + " dBFS; attack " + juce::String(p.attackMs,0) + " ms, release " + juce::String(p.releaseMs,0) + " ms. Turns down louder passages; no automatic makeup gain.";
     }
-    text += "\n\nApplies to this track's playback and WAV export only. Original recordings stay untouched. FX off bypasses the preset for comparison. Stop playback before changing it. No added buffering latency; no reverb, gate or live mic monitoring. These are starting points, not automatic fixes for every recording.";
+    text += "\n\nApplies to this track's playback and WAV export only. Original recordings stay untouched. FX off bypasses this EQ/compressor preset; the separate Verb switch controls reverb. Stop playback before changing it. No added buffering latency, gate or live mic monitoring. These are starting points, not automatic fixes for every recording.";
     return text;
 }
 float TrackEffects::Biquad::tick(float x) noexcept
@@ -42,8 +42,10 @@ float TrackEffects::Biquad::tick(float x) noexcept
     z1=c[1]*x-c[4]*y+z2; z2=c[2]*x-c[5]*y;
     return y;
 }
-void TrackEffects::prepare(const juce::String& id, bool bypass, double rate)
+void TrackEffects::prepare(const juce::String& id, bool bypass, double rate, const ReverbSettings& settings)
 {
+    reverb.reset();
+    if(settings.enabled && settings.mix>0){reverb=std::make_unique<TrackReverb>();reverb->prepare(settings,rate);}
     const auto& p=effectPreset(id);
     dry=bypass || p.highPass==0;
     envelope=0;
@@ -65,7 +67,7 @@ void TrackEffects::prepare(const juce::String& id, bool bypass, double rate)
 }
 void TrackEffects::process(float* left,float* right,int count) noexcept
 {
-    if(dry) return;
+    if(dry) {if(reverb)reverb->process(left,right,count);return;}
     juce::ScopedNoDenormals noDenormals;
     for(int i=0;i<count;++i)
     {
@@ -79,6 +81,7 @@ void TrackEffects::process(float* left,float* right,int count) noexcept
         const float gain=juce::Decibels::decibelsToGain(std::max(0.0f,db-threshold)*slope);
         left[i]=l*gain; right[i]=r*gain;
     }
+    if(reverb)reverb->process(left,right,count);
 }
 void renderTrackAudio(const Track& track,double start,double rate,float* left,float* right,int count) noexcept
 {

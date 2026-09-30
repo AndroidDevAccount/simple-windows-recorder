@@ -1,5 +1,8 @@
 # Track effects — version 0.3
 
+Version 0.4 adds [independent reverb](reverb.md) after this chain. The following
+describes the EQ/compressor preset itself, which remains separately bypassable.
+
 Six choices: Dry, Lead vocal, Warm vocal, Acoustic guitar, Bass, Gentle cleanup.
 Every processed preset uses a 12 dB/octave high-pass, two broad Q=0.8 bell EQ
 bands, then a stereo-linked peak-envelope compressor. The track fader is after

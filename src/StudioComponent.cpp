@@ -10,7 +10,7 @@ namespace studio
 {
 namespace
 {
-constexpr int headerWidth = 242, rulerHeight = 38, trackHeight = 145;
+constexpr int headerWidth = 242, rulerHeight = 38, trackHeight = 203;
 const juce::Colour bg(0xff10151e), panel(0xff19212e), ink(0xffe8edf5), muted(0xff94a3b8), accent(0xff5ee0b5), red(0xffff657a);
 juce::Colour trackColour(int i) { return std::array<juce::Colour, 4>{accent, juce::Colour(0xff78b9ff), juce::Colour(0xffffc778), juce::Colour(0xffc1a0ff)}[(size_t)i % 4]; }
 juce::String formatTime(double time)
@@ -96,6 +96,23 @@ public:
         info.onClick=[this]{juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
             juce::String(effectPreset(model().effectPresetId).name)+(model().effectsBypassed?" (bypassed)":""),describeEffectPreset(model().effectPresetId),"Got it");};
         for(auto* c:std::initializer_list<juce::Component*>{&effects,&fx,&info}) addAndMakeVisible(c);
+        verb.setButtonText("Verb");verb.setToggleState(t.reverb.enabled,juce::dontSendNotification);
+        verb.setTooltip("Independent nondestructive reverb, after the EQ/compressor. Original takes stay dry.");
+        style.addItem("Spring",1);style.addItem("Hall",2);style.addItem("Flerb",3);
+        style.setSelectedId(t.reverb.style=="hall"?2:t.reverb.style=="flerb"?3:1,juce::dontSendNotification);
+        style.setTooltip("Holy Grail-inspired flavors, not an exact EHX emulation.");
+        reverbInfo.setButtonText("?");reverbInfo.setTooltip("Explain this reverb");
+        mix.setName("Reverb wet/dry mix");mix.setSliderStyle(juce::Slider::LinearHorizontal);
+        mix.setTextBoxStyle(juce::Slider::TextBoxRight,false,49,22);mix.setRange(0,100,1);
+        mix.setTextValueSuffix("%");mix.setValue(t.reverb.mix*100,juce::dontSendNotification);
+        mix.setTooltip("Wet/dry mix: 0% unchanged, 100% reverb only. Stop first to change.");
+        mixLabel.setText("Mix",juce::dontSendNotification);
+        verb.onClick=[this]{if(owner.editable()){owner.checkpoint();model().reverb.enabled=verb.getToggleState();owner.changed();}};
+        style.onChange=[this]{if(owner.editable()){owner.checkpoint();model().reverb.style=style.getSelectedId()==2?"hall":style.getSelectedId()==3?"flerb":"spring";owner.changed();}};
+        mix.onDragStart=[this]{if(owner.editable())owner.checkpoint();};
+        mix.onValueChange=[this]{if(owner.editable()){if(!mix.isMouseButtonDown())owner.checkpoint();model().reverb.mix=(float)mix.getValue()/100;owner.changed();}};
+        reverbInfo.onClick=[this]{juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,"Track reverb",describeReverb(model().reverb),"Got it");};
+        for(auto* c:std::initializer_list<juce::Component*>{&verb,&style,&reverbInfo,&mix,&mixLabel})addAndMakeVisible(c);
         for (auto* c : std::initializer_list<juce::Component*>{&title, &input, &gain}) addAndMakeVisible(c);
     }
     Track& model() { return owner.engine.session().tracks[(size_t)track]; }
@@ -105,6 +122,8 @@ public:
         arm.setBounds(17, 39, 45, 25); mute.setBounds(68, 39, 29, 25); solo.setBounds(102, 39, 29, 25);
         input.setBounds(137, 39, 90, 25); gain.setBounds(13, 73, 139, 22);
         fx.setBounds(10,108,44,25); effects.setBounds(55,108,137,25); info.setBounds(198,108,29,25);
+        verb.setBounds(10,140,67,25);style.setBounds(80,140,112,25);reverbInfo.setBounds(198,140,29,25);
+        mixLabel.setBounds(15,172,32,22);mix.setBounds(46,172,181,22);
     }
     void paint(juce::Graphics& g) override
     {
@@ -118,7 +137,7 @@ public:
         g.setColour(bg); g.fillRect(0, getHeight() - 1, getWidth(), 1);
     }
     void mouseDown(const juce::MouseEvent&) override { owner.selectedTrack = track; owner.selectedClipId.clear(); owner.timelineRepaint(); }
-    void update() { const bool can = owner.editable(); for (auto* c : std::initializer_list<juce::Component*>{&title,&arm,&mute,&solo,&input,&gain,&effects,&fx}) c->setEnabled(can); repaint(); }
+    void update() { const bool can = owner.editable(); for (auto* c : std::initializer_list<juce::Component*>{&title,&arm,&mute,&solo,&input,&gain,&effects,&fx,&verb,&style,&mix}) c->setEnabled(can); repaint(); }
 private:
     StudioComponent& owner;
     int track;
@@ -129,6 +148,11 @@ private:
     juce::ToggleButton fx;
     juce::TextButton info;
     juce::Slider gain;
+    juce::ToggleButton verb;
+    juce::ComboBox style;
+    juce::TextButton reverbInfo;
+    juce::Slider mix;
+    juce::Label mixLabel;
 };
 
 class Timeline final : public juce::Component
@@ -528,6 +552,7 @@ void StudioComponent::loadPreview()
     {
         Track t;t.id=juce::Uuid().toString();t.name=juce::StringArray{"Voice","Acoustic guitar","Bass","Harmony"}[i];t.armed=i==0;t.inputChannel=i==0?0:1;
         t.effectPresetId=juce::StringArray{"lead-vocal","acoustic-guitar","bass","warm-vocal"}[i];
+        t.reverb.enabled=i<2;t.reverb.style=i==0?"hall":"spring";
         if(i<3){Clip c;c.id=juce::Uuid().toString();c.startSeconds=i==0?7:0;c.lengthSeconds=i==0?15:37;c.sampleRate=48000;c.audio=std::make_shared<juce::AudioBuffer<float>>(1,(int)(c.lengthSeconds*48000));for(int n=0;n<c.audio->getNumSamples();++n){const double time=n/48000.0;const double env=std::pow(std::max(0.0,std::sin(time*(i==0?3:6))),i==0?0.5:3.0);c.audio->setSample(0,n,(float)(0.5*env*std::sin(time*juce::MathConstants<double>::twoPi*(110+55*i))));}t.clips.push_back(c);}
         engine.session().tracks.push_back(t);
     }

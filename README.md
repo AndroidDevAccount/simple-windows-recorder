@@ -44,6 +44,15 @@ Presets/bypass save with the project and support undo. Existing tracks load
 dry by default. There is no lookahead or added block-buffering latency.
 See [effects implementation and test notes](docs/track-effects.md).
 
+## Version 0.4: independent reverb
+
+Enable **Verb** on a track, choose **Spring**, **Hall** or **Flerb**, and adjust
+**Mix** (0% dry, 100% wet). The second **?** explains the sound and controls.
+This is a Holy Grail-inspired effect, not an exact EHX emulation. It follows
+the EQ/compressor but has its own on/off switch. Everything is nondestructive,
+saved with the project and included in export, including the decaying tail.
+Stop first before changing effects. See [reverb notes](docs/reverb.md).
+
 ## Planned scope (not all implemented)
 
 - Windows 10/11
