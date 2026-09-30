@@ -259,6 +259,15 @@ bool runEngineTests(juce::String& report)
             ++passed;
             report += "PASS: device loss drains disk data and trims the unavailable tail.\n";
         }
+        {
+            SessionEngine engine;engine.prepareForDevice(FakeDevice::rate,FakeDevice::block,2);
+            engine.session().countInBars=0;engine.setDefaultInput(1);
+            addTrack(engine,"Default A",-1,0);addTrack(engine,"Default B",-1,0);addTrack(engine,"Override",0,0);
+            FakeDevice device{engine};device.signal=[](int channel,std::int64_t){return channel==1?0.4f:0.1f;};
+            require(engine.record(30,0,directory),"Could not record default routing test");device.advance(4800);engine.stop();device.finish();
+            for(int i=0;i<3;++i){const auto& clip=findPunch(engine.session().tracks[(size_t)i],30);require(close(clip.audio->getSample(0,100),i<2?0.4:0.1,1e-6),"Default input/explicit override mismatch");}
+            ++passed;report+="PASS: two default tracks follow saved channel while explicit override stays independent.\n";
+        }
         report += juce::String(passed) + " engine regression groups passed.\n";
         directory.deleteRecursively();
         return true;

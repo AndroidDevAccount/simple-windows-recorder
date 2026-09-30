@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "SessionEngine.h"
 #include "TrackEffects.h"
+#include "Diagnostics.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -59,6 +60,8 @@ struct SessionEngine::Impl
     std::thread writerThread;
     AnalysisQueue<LivePeak,8193> live;
     InputAnalysis analysis;
+    int defaultInput=0;
+    std::atomic<int> driverErrorState{0};std::array<char,1024> driverError{};
 
     Impl() { physicalToCallback.fill(-1); }
 
@@ -327,8 +330,9 @@ bool SessionEngine::record(double startSeconds, double compensationMs, const juc
         const auto& track = impl->model.tracks[i];
         if (!track.armed)
             continue;
-        if (track.inputChannel < 0 || track.inputChannel >= maxInputs
-            || impl->physicalToCallback[static_cast<std::size_t>(track.inputChannel)] < 0)
+        const int channel=track.inputChannel<0?impl->defaultInput:track.inputChannel;
+        if (channel < 0 || channel >= maxInputs
+            || impl->physicalToCallback[static_cast<std::size_t>(channel)] < 0)
         {
             impl->error = "The input selected for " + track.name + " is unavailable. Choose an active microphone or instrument input.";
             impl->takes.clear();
@@ -336,8 +340,8 @@ bool SessionEngine::record(double startSeconds, double compensationMs, const juc
         }
         Impl::Take take;
         take.trackIndex = i;
-        take.physicalInput = track.inputChannel;
-        take.callbackInput = impl->physicalToCallback[static_cast<std::size_t>(track.inputChannel)];
+        take.physicalInput = channel;
+        take.callbackInput = impl->physicalToCallback[static_cast<std::size_t>(channel)];
         impl->takes.push_back(std::move(take));
     }
     if (impl->takes.empty() || impl->takes.size() > maxArmedTracks)
@@ -499,11 +503,14 @@ void SessionEngine::insertPunch(Track& track, const Clip& replacement)
 }
 
 bool SessionEngine::readLivePeak(LivePeak& p) {return impl->live.pop(p);}
+void SessionEngine::setDefaultInput(int ch) {if(!isBusy())impl->defaultInput=ch;}
 void SessionEngine::setTunerInput(int channel) {impl->analysis.setInput(channel);}
 bool SessionEngine::pollPitch(PitchResult& result) {return impl->analysis.poll(result);}
 
 bool SessionEngine::poll()
 {
+    if(impl->driverErrorState.load(std::memory_order_acquire)==2)
+    {impl->error="Audio driver error: "+juce::String::fromUTF8(impl->driverError.data());logEvent("ERROR "+impl->error);impl->driverErrorState.store(0,std::memory_order_release);}
     if (impl->transport.load(std::memory_order_acquire) != Transport::finalizing
         || !impl->workerDone.load(std::memory_order_acquire))
         return false;
@@ -583,12 +590,15 @@ void SessionEngine::audioDeviceStopped()
     impl->interrupted();
     impl->rate.store(0.0);
 }
-void SessionEngine::audioDeviceError(const juce::String&)
+void SessionEngine::audioDeviceError(const juce::String& error)
 {
+    int expected=0;if(impl->driverErrorState.compare_exchange_strong(expected,1))
+    {error.copyToUTF8(impl->driverError.data(),impl->driverError.size());impl->driverErrorState.store(2,std::memory_order_release);}
     // This may arrive on any thread: let the next callback stop gracefully.
     // audioDeviceStopped handles the case where no further callback arrives.
     impl->deviceLost.store(true);
     impl->stopRequested.store(true);
+    impl->rate.store(0);
 }
 
 void SessionEngine::audioDeviceIOCallbackWithContext(const float* const* inputs, int inputCount,

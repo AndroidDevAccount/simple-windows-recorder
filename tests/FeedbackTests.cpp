@@ -53,6 +53,11 @@ bool runFeedbackTests(juce::String& report)
     if(queue.push(5))return fail("overflow not bounded");
     for(int i=0;i<4;++i){int x=-1;if(!queue.pop(x)||x!=i)return fail("queue order");}
     report+="PASS feedback: shared click signal matches playback at 100/120 BPM; telemetry overflow bounded.\n";
+    SessionEngine failedEngine;failedEngine.prepareForDevice(48000,256,2);
+    failedEngine.audioDeviceError("Cannot open Focusrite Thunderbolt ASIO (0x54f)");
+    failedEngine.poll();
+    if(!failedEngine.lastError().contains("0x54f")||failedEngine.sampleRate()!=0||failedEngine.play(0))return fail("driver failure not retained or transport still enabled");
+    report+="PASS feedback: raw driver error retained and offline playback rejected.\n";
     return true;
 }
 }

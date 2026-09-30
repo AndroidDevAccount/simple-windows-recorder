@@ -1,4 +1,8 @@
-# Simple Windows Recorder
+# Take One
+
+Formerly Simple Windows Recorder. Version 0.6 adds a distinctive app icon,
+saved default recording input, explicit device routing, Retry audio and a
+copyable developer diagnostics window. See [routing and recovery](docs/reliability-and-routing.md).
 
 A musician-first multitrack recorder for Windows: arm a track, count in, record,
 and have the new take land in time. The product deliberately hides traditional

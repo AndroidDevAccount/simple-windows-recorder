@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "AudioPreferences.h"
+#include "Diagnostics.h"
 #include <cmath>
 
 namespace studio
@@ -135,10 +136,9 @@ static AudioSetupResult evaluateSavedCalibration(const juce::PropertySet& proper
     return result;
 }
 
-AudioSetupResult restoreAudioSetup(juce::AudioDeviceManager& manager)
+static AudioSetupResult restoreAudioSetupFrom(juce::AudioDeviceManager& manager,const juce::PropertySet* settings)
 {
-    auto settings = openAudioPreferences();
-    manager.initialise(2, 2, nullptr, true);
+    // Enumerate without opening a default driver first.
     auto& types = manager.getAvailableDeviceTypes();
     juce::StringArray names;
     for (auto* type : types) names.add(type->getTypeName());
@@ -148,14 +148,17 @@ AudioSetupResult restoreAudioSetup(juce::AudioDeviceManager& manager)
     if (index < 0) index = names.indexOf(manager.getCurrentAudioDeviceType());
     if (index < 0)
         return { "No audio system is available. Open Audio setup.", 0.0, false };
-    manager.setCurrentAudioDeviceType(names[index], true);
-    auto* type = manager.getCurrentDeviceTypeObject();
+    auto* type = types[index];
     if (type == nullptr) return { "Could not open the audio system.", 0.0, false };
     type->scanForDevices();
     const auto inputs = type->getDeviceNames(true);
     const auto outputs = type->getDeviceNames(false);
-    const auto input = chooseDevice(inputs, savedBackendAvailable ? settings->getValue("inputDevice") : juce::String(), "Focusrite");
-    const auto output = chooseDevice(outputs, savedBackendAvailable ? settings->getValue("outputDevice") : juce::String(), "Focusrite");
+    const auto savedInput=settings->getValue("inputDevice"),savedOutput=settings->getValue("outputDevice");
+    logEvent("AUDIO enumerate "+names[index]+" inputs=["+inputs.joinIntoString(", ")+"] outputs=["+outputs.joinIntoString(", ")+"]");
+    if(savedInput.isNotEmpty() && (!savedBackendAvailable||!inputs.contains(savedInput)||!outputs.contains(savedOutput)))
+    {manager.closeAudioDevice();const auto msg="Saved audio device unavailable: "+settings->getValue("audioBackend")+" / "+savedInput+" -> "+savedOutput+". No alternative driver was opened. Open Audio setup.";logEvent("ERROR "+msg);return {msg,0,false};}
+    const auto input = chooseDevice(inputs,savedInput,"Focusrite USB");
+    const auto output = chooseDevice(outputs,savedOutput,"Focusrite USB");
     if (input < 0 || output < 0)
         return { "An input or output device is missing. Open Audio setup.", 0.0, false };
     auto setup = manager.getAudioDeviceSetup();
@@ -169,18 +172,26 @@ AudioSetupResult restoreAudioSetup(juce::AudioDeviceManager& manager)
     setup.outputChannels.clear();
     setup.inputChannels.setRange(0, 2, true);
     setup.outputChannels.setRange(0, 2, true);
-    auto error = manager.setAudioDeviceSetup(setup, true);
+    juce::XmlElement xml("DEVICESETUP");xml.setAttribute("deviceType",names[index]);xml.setAttribute("audioInputDeviceName",setup.inputDeviceName);xml.setAttribute("audioOutputDeviceName",setup.outputDeviceName);
+    xml.setAttribute("audioDeviceRate",setup.sampleRate);xml.setAttribute("audioDeviceBufferSize",setup.bufferSize);xml.setAttribute("audioDeviceInChans","11");xml.setAttribute("audioDeviceOutChans","11");
+    logEvent("AUDIO opening exact request "+xml.toString());
+    auto error = manager.initialise(2,2,&xml,false);
     if (error.isNotEmpty())
     {
         // Mono devices may reject a two-channel mask. JUCE opens the channels that
         // exist on most drivers, but retry channel 1 for those that require it.
         setup.inputChannels.clear();
         setup.inputChannels.setBit(0);
-        error = manager.setAudioDeviceSetup(setup, true);
+        logEvent("ERROR first open: "+error+"; retry same device with one input");
+        xml.setAttribute("audioDeviceInChans","1");error=manager.initialise(1,2,&xml,false);
     }
-    if (error.isNotEmpty()) return { "Could not open audio: " + error, 0.0, false };
+    if (error.isNotEmpty()) {manager.closeAudioDevice();logEvent("ERROR audio open: "+error);return { "Could not open audio: " + error, 0.0, false };}
+    const auto actual=currentAudioIdentity(manager);logEvent("AUDIO ready "+actual.backend+" | "+actual.input+" -> "+actual.output+" | "+juce::String(actual.sampleRate)+" Hz / "+juce::String(actual.bufferSize)+" samples | input mask="+actual.inputMask);
     return calibrationForActiveSetup(manager);
 }
+
+AudioSetupResult restoreAudioSetup(juce::AudioDeviceManager& manager)
+{auto settings=openAudioPreferences();return restoreAudioSetupFrom(manager,settings.get());}
 
 bool runPreferenceTests(juce::String& report)
 {
@@ -192,6 +203,24 @@ bool runPreferenceTests(juce::String& report)
         if (!condition) failures.add(description);
     };
     juce::StringArray devices { "Focusrite first", "My saved device", "Focusrite last" };
+    struct FakeType final:juce::AudioIODeviceType
+    {
+        juce::StringArray requests;
+        FakeType():AudioIODeviceType("Test ASIO"){}
+        void scanForDevices()override{}
+        juce::StringArray getDeviceNames(bool)const override{return {"Focusrite Thunderbolt ASIO","Focusrite USB ASIO"};}
+        int getDefaultDeviceIndex(bool)const override{return 0;}
+        int getIndexOfDevice(juce::AudioIODevice*,bool)const override{return -1;}
+        bool hasSeparateInputsAndOutputs()const override{return false;}
+        juce::AudioIODevice* createDevice(const juce::String& out,const juce::String& in)override{requests.add(out+" | "+in);return nullptr;}
+    };
+    juce::AudioDeviceManager fakeManager;auto fake=std::make_unique<FakeType>();auto* spy=fake.get();fakeManager.addAudioDeviceType(std::move(fake));
+    juce::PropertySet desired;desired.setValue("audioBackend","Test ASIO");desired.setValue("inputDevice","Focusrite USB ASIO");desired.setValue("outputDevice","Focusrite USB ASIO");
+    const auto failed=restoreAudioSetupFrom(fakeManager,&desired);
+    check(spy->requests.size()==2 && spy->requests[0]=="Focusrite USB ASIO | Focusrite USB ASIO" && spy->requests[1]==spy->requests[0],"Exact USB open and same-device retry must never open default Thunderbolt driver.");
+    check(failed.message.contains("Could not open audio")&&!failed.calibrated,"Open failure must remain visible and uncalibrated.");
+    spy->requests.clear();desired.setValue("inputDevice","Missing saved device");restoreAudioSetupFrom(fakeManager,&desired);
+    check(spy->requests.isEmpty(),"Missing saved device must not silently open another driver.");
     check(chooseDevice(devices, "My saved device", "Focusrite") == 1,
           "An exact saved device must beat every fallback match.");
     juce::PropertySet saved;

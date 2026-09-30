@@ -3,17 +3,25 @@
 #include "StudioComponent.h"
 #include "AudioPreferences.h"
 #include "TrackEffects.h"
+#include "Diagnostics.h"
 
 namespace studio { bool runProjectTests(juce::String&); }
 
 class RecorderApplication final : public juce::JUCEApplication
 {
 public:
-    const juce::String getApplicationName() override { return "Simple Recorder"; }
-    const juce::String getApplicationVersion() override { return "0.5.0"; }
+    const juce::String getApplicationName() override { return "Take One"; }
+    const juce::String getApplicationVersion() override { return "0.6.0"; }
     bool moreThanOneInstanceAllowed() override
     { return getCommandLineParameters().contains("--self-test") || getCommandLineParameters().contains("--preview"); }
     void initialise(const juce::String& args) override
+    {
+        if(!args.contains("--self-test")&&!args.contains("--preview"))studio::startDiagnostics();
+        try {initialiseImpl(args);}catch(const std::exception& e){studio::logEvent("FATAL startup: "+juce::String(e.what()));juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,"Take One startup failed",juce::String(e.what())+"\nSee diagnostic log: "+studio::diagnosticFile().getFullPathName(),"Close",nullptr,juce::ModalCallbackFunction::create([this](int){quit();}));}
+    }
+    void unhandledException(const std::exception* e,const juce::String& file,int line) override
+    {const auto detail=(e?juce::String(e->what()):"Unknown exception")+" at "+file+":"+juce::String(line);studio::logEvent("ERROR unhandled UI exception: "+detail);if(window)window->studio->handleUnexpectedError(detail);else quit();}
+    void initialiseImpl(const juce::String& args)
     {
         if(args.contains("--self-test"))
         {
@@ -43,7 +51,7 @@ public:
             });
         }
     }
-    void shutdown() override { window.reset(); }
+    void shutdown() override { window.reset();studio::logEvent("SHUTDOWN");juce::Logger::setCurrentLogger(nullptr); }
     void systemRequestedQuit() override { if(window)window->studio->requestClose();else quit(); }
     void anotherInstanceStarted(const juce::String&) override { if(window)window->toFront(true); }
 private:
@@ -51,7 +59,7 @@ private:
     {
     public:
         studio::StudioComponent* studio=nullptr;
-        explicit Window(bool preview) : DocumentWindow("Simple Recorder",juce::Colour(0xff10151e),allButtons)
+        explicit Window(bool preview) : DocumentWindow("Take One",juce::Colour(0xff10151e),allButtons)
         {
             setUsingNativeTitleBar(true);studio=new studio::StudioComponent(preview);setContentOwned(studio,true);
             setResizable(true,false);setResizeLimits(850,580,2000,1300);

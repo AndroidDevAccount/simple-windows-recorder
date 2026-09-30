@@ -29,7 +29,7 @@ struct Track
     bool effectsBypassed = false;
     ReverbSettings reverb;
     // Zero-based physical device input channel, not callback-array index.
-    int inputChannel = 0;
+    int inputChannel = -1; // -1 follows saved global default, >=0 is explicit physical channel.
     std::vector<Clip> clips;
 };
 
@@ -75,6 +75,7 @@ public:
     bool readLivePeak(LivePeak&);
     void setTunerInput(int channel);
     bool pollPitch(PitchResult&);
+    void setDefaultInput(int);
     // Call on the UI timer. True means a recording was committed to session().
     // Even on failure, this releases the transport when finalization completes.
     bool poll();

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "CalibrationPanel.h"
 #include "AudioPreferences.h"
+#include "Diagnostics.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -71,6 +72,14 @@ public:
         running.store(false);
         sampleRate.store(0.0);
         testToneSamples.store(0);
+    }
+
+    void audioDeviceError(const juce::String& error) override
+    {
+        int expected=0;
+        if(errorState.compare_exchange_strong(expected,1))
+        {error.copyToUTF8(errorBuffer.data(),errorBuffer.size());errorState.store(2,std::memory_order_release);}
+        audioDeviceStopped();triggerAsyncUpdate();
     }
 
     void audioDeviceIOCallbackWithContext(const float* const* inputs, int numInputs,
@@ -219,9 +228,16 @@ private:
 
     void handleAsyncUpdate() override
     {
+        if(errorState.load(std::memory_order_acquire)==2)
+        {
+            CalibrationResult failed;failed.detail="Audio driver error: "+juce::String::fromUTF8(errorBuffer.data());
+            errorState.store(0,std::memory_order_release);logEvent("ERROR calibration: "+failed.detail);
+            if(onFinished)onFinished(failed);return;
+        }
         if (onFinished) onFinished(analyse());
     }
 
+    std::atomic<int> errorState{0};std::array<char,1024> errorBuffer{};
     std::vector<float> capture;
     std::atomic<double> sampleRate { 0.0 };
     std::atomic<unsigned> deviceGeneration { 0 };
@@ -374,6 +390,10 @@ public:
         {
             calibrationBusy = false;
             setControlsEnabled(true);
+            if(r.detail.startsWith("Audio driver error:"))
+            {
+                invalidateCalibration();status.setText(r.detail+"\nClose Audio setup and use Retry audio, or select another device.",juce::dontSendNotification);return;
+            }
             if (calibrationGeneration != engine.getDeviceGeneration()
                 || !(calibrationIdentity == currentAudioIdentity(deviceManager)))
             {
@@ -521,7 +541,9 @@ private:
         backendSelector.clear(juce::dontSendNotification);
         backendNames.clear();
         int id = 1;
-        const auto activeBackend = deviceManager.getCurrentAudioDeviceType();
+        auto preferences = openAudioPreferences();
+        const auto activeBackend = deviceManager.getCurrentAudioDeviceType().isNotEmpty()
+            ? deviceManager.getCurrentAudioDeviceType() : preferences->getValue("audioBackend", "ASIO");
         int selected = -1;
         for (auto* type : deviceManager.getAvailableDeviceTypes())
         {
@@ -530,6 +552,7 @@ private:
             if (type->getTypeName() == activeBackend)
                 selected = static_cast<int>(backendNames.size()) - 1;
         }
+        if (selected < 0 && !backendNames.empty()) selected = 0;
         if (selected >= 0)
         {
             backendSelector.setSelectedItemIndex(selected, juce::dontSendNotification);
@@ -541,7 +564,9 @@ private:
 
     void refreshEndpoints()
     {
-        auto* type = deviceManager.getCurrentDeviceTypeObject();
+        const auto index = backendSelector.getSelectedItemIndex();
+        if (!juce::isPositiveAndBelow(index, deviceManager.getAvailableDeviceTypes().size())) return;
+        auto* type = deviceManager.getAvailableDeviceTypes()[index];
         if (type == nullptr) return;
         type->scanForDevices();
         inputNames = type->getDeviceNames(true);
@@ -551,8 +576,9 @@ private:
         for (int i = 0; i < inputNames.size(); ++i) inputSelector.addItem(inputNames[i], i + 1);
         for (int i = 0; i < outputNames.size(); ++i) outputSelector.addItem(outputNames[i], i + 1);
         const auto active = deviceManager.getAudioDeviceSetup();
-        const auto inputIndex = inputNames.indexOf(active.inputDeviceName);
-        const auto outputIndex = outputNames.indexOf(active.outputDeviceName);
+        auto preferences = openAudioPreferences();
+        const auto inputIndex = inputNames.indexOf(active.inputDeviceName.isNotEmpty() ? active.inputDeviceName : preferences->getValue("inputDevice"));
+        const auto outputIndex = outputNames.indexOf(active.outputDeviceName.isNotEmpty() ? active.outputDeviceName : preferences->getValue("outputDevice"));
         inputSelector.setSelectedItemIndex(inputIndex >= 0 ? inputIndex : (inputNames.isEmpty() ? -1 : 0),
                                            juce::dontSendNotification);
         outputSelector.setSelectedItemIndex(outputIndex >= 0 ? outputIndex : (outputNames.isEmpty() ? -1 : 0),
@@ -565,7 +591,6 @@ private:
         invalidateCalibration();
         const auto index = backendSelector.getSelectedItemIndex();
         if (!juce::isPositiveAndBelow(index, static_cast<int>(backendNames.size()))) return;
-        deviceManager.setCurrentAudioDeviceType(backendNames[static_cast<size_t>(index)], true);
         refreshEndpoints();
         applyDeviceSetup();
     }
@@ -589,14 +614,17 @@ private:
         setup.outputChannels.clear();
         setup.inputChannels.setRange(0, 2, true);
         setup.outputChannels.setRange(0, 2, true);
-        auto error = deviceManager.setAudioDeviceSetup(setup, true);
+        juce::XmlElement xml("DEVICESETUP");xml.setAttribute("deviceType",backendSelector.getText());xml.setAttribute("audioInputDeviceName",setup.inputDeviceName);xml.setAttribute("audioOutputDeviceName",setup.outputDeviceName);xml.setAttribute("audioDeviceRate",48000);xml.setAttribute("audioDeviceBufferSize",256);xml.setAttribute("audioDeviceInChans","11");xml.setAttribute("audioDeviceOutChans","11");
+        logEvent("SETUP opening "+xml.toString());
+        auto error = deviceManager.initialise(2,2,&xml,false);
         if (error.isNotEmpty())
         {
             setup.inputChannels.clear();
             setup.inputChannels.setBit(0);
-            error = deviceManager.setAudioDeviceSetup(setup, true);
+            logEvent("ERROR setup first open: "+error);xml.setAttribute("audioDeviceInChans","1");error=deviceManager.initialise(1,2,&xml,false);
         }
         saveDevices.setButtonText("Save devices");
+        logEvent(error.isEmpty()?"SETUP ready: "+setup.inputDeviceName:"ERROR setup: "+error);
         auto* device = deviceManager.getCurrentAudioDevice();
         const auto matching = calibrationForActiveSetup(deviceManager);
         calibrationAvailable = error.isEmpty() && matching.calibrated;

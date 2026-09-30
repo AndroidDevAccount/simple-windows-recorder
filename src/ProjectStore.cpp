@@ -92,7 +92,7 @@ juce::Result loadProject(Session& session, const juce::File& file, double& playh
         track.id = t["id"].toString(); track.name = t["name"].toString();
         track.armed = (bool)t["armed"]; track.mute = (bool)t["mute"]; track.solo = (bool)t["solo"];
         track.gain = (float)juce::jlimit(0.0, 4.0, (double)t["gain"]);
-        track.inputChannel = juce::jlimit(0, 63, (int)t["input"]);
+        track.inputChannel = juce::jlimit(-1, 63, t.hasProperty("input")?(int)t["input"]:-1);
         track.effectPresetId = effectPreset(t["effectPreset"].toString()).id;
         track.effectsBypassed = (bool)t["effectsBypassed"];
         track.reverb.enabled=(bool)t["reverbEnabled"];

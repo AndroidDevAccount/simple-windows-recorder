@@ -18,6 +18,7 @@ public:
     void resized() override;
     bool keyPressed(const juce::KeyPress&) override;
     void requestClose();
+    void handleUnexpectedError(const juce::String&);
     static bool runFeedbackUiChecks(juce::String&);
 
 private:
@@ -38,6 +39,9 @@ private:
     void importFile();
     void exportFile();
     void openAudioSetup();
+    void retryAudio();
+    juce::String inputDescription(int) const;
+    void refreshInputs();
     void beginPlay();
     void beginRecord();
     void stopTransport();
@@ -69,6 +73,9 @@ private:
     juce::Label name, clock, tempoLabel, latencyLabel, status, guide, zoomLabel;
     juce::Slider tempo, zoom;
     juce::ComboBox tunerInput;
+    juce::ComboBox defaultInputSelector;
+    juce::TextButton diagnosticsButton{"Diagnostics"},retryButton{"Retry audio"},defaultTracksButton{"Tracks to default"};
+    int defaultInput=0;bool applicationFault=false;
     juce::Label tunerTitle,tunerDisplay;
     std::vector<std::vector<LivePeak>> livePeaks;
     double pitchUpdated=0,recordViewStart=0;
